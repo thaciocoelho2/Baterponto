@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 import json, os, asyncio, uuid, pytz
-from datetime import datetime, timedelta
+from datetime import datetime
 from dotenv import load_dotenv
 
 # --- 1. CONFIGURAÇÕES ---
@@ -49,7 +49,7 @@ async def processar_saida(user, guild, automatico=False):
     delta = agora - entrada_dt
     segundos_trabalhados = int(delta.total_seconds())
     
-    # Acumular horas no banco de dados
+    # Acumular horas no banco
     total_antigo = servidor_db["usuarios"][uid].get("total_segundos", 0)
     servidor_db["usuarios"][uid]["total_segundos"] = total_antigo + segundos_trabalhados
     
@@ -132,26 +132,27 @@ class PontoView(discord.ui.View):
         dados = carregar_dados()
         
         if sid not in dados["servidores"] or uid not in dados["servidores"][sid]["usuarios"]:
-            return await interaction.response.send_message("❌ Você ainda não possui horas registradas neste servidor.", ephemeral=True, delete_after=5)
+            return await interaction.response.send_message("❌ Você ainda não possui horas registradas.", ephemeral=True, delete_after=5)
 
         total_segundos = dados["servidores"][sid]["usuarios"][uid].get("total_segundos", 0)
         
-        # Converter para formato legível
-        horas = total_segundos // 3600
-        minutos = (total_segundos % 3600) // 60
+        # --- CORREÇÃO: CÁLCULO INCLUINDO SEGUNDOS ---
+        horas, rem = divmod(total_segundos, 3600)
+        minutos, segundos = divmod(rem, 60)
+        tempo_formatado = f"**{horas} horas, {minutos} minutos e {segundos} segundos**"
         
         embed = discord.Embed(title="📊 Relatório de Horas", color=discord.Color.blue())
         if interaction.guild.icon: embed.set_thumbnail(url=interaction.guild.icon.url)
         embed.add_field(name="🏢 Empresa", value=f"**{interaction.guild.name}**", inline=False)
         embed.add_field(name="👤 Funcionário", value=f"**{interaction.user.display_name}**", inline=False)
-        embed.add_field(name="⏳ Total Acumulado", value=f"**{horas} horas e {minutos} minutos**", inline=False)
-        embed.set_footer(text="Cálculo baseado em todos os pontos registrados.")
+        embed.add_field(name="⏳ Total Acumulado", value=tempo_formatado, inline=False)
+        embed.set_footer(text="Cálculo exato baseado em todos os registros.")
 
         try:
             await interaction.user.send(embed=embed)
-            await interaction.response.send_message("✅ Seu relatório de horas foi enviado na DM!", ephemeral=True, delete_after=5)
+            await interaction.response.send_message("✅ Relatório enviado na DM!", ephemeral=True, delete_after=5)
         except:
-            await interaction.response.send_message("❌ Não consegui enviar sua DM. Verifique se suas mensagens privadas estão abertas.", ephemeral=True, delete_after=5)
+            await interaction.response.send_message("❌ Abra sua DM para receber o relatório.", ephemeral=True, delete_after=5)
 
 # --- 5. CLASSE DO BOT ---
 class PontoBot(commands.Bot):
