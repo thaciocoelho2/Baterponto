@@ -3,14 +3,15 @@ from discord.ext import commands
 import json
 import os
 from datetime import datetime
+import pytz
 from dotenv import load_dotenv
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
+BR_TZ = pytz.timezone('America/Sao_Paulo')
 
 class PontoBot(commands.Bot):
     def __init__(self):
-        # Intents necessários para encontrar o usuário e enviar DM
         intents = discord.Intents.default()
         intents.members = True 
         intents.message_content = True
@@ -18,11 +19,10 @@ class PontoBot(commands.Bot):
 
     async def setup_hook(self):
         await self.tree.sync()
-        print(f"✅ Sistema de Ponto Independente Online: {self.user}")
 
 bot = PontoBot()
 
-# --- BANCO DE DADOS ---
+# --- AUXILIARES ---
 def carregar_dados():
     try:
         with open('pontos.json', 'r', encoding='utf-8') as f:
@@ -39,93 +39,72 @@ def calcular_tempo_exato(regs):
         inicio = datetime.strptime(regs["Entrada"], fmt)
         fim = datetime.strptime(regs["Saída"], fmt)
         trabalhado = fim - inicio
-        total_segundos = int(trabalhado.total_seconds())
-        
-        horas = total_segundos // 3600
-        minutos = (total_segundos % 3600) // 60
-        segundos = total_segundos % 60
-        return f"{horas}h {minutos}m {segundos}s"
-    except: return "Erro no cálculo"
+        s = int(trabalhado.total_seconds())
+        return f"{s // 3600}h {(s % 3600) // 60}m {s % 60}s"
+    except: return "Erro"
 
-# --- INTERFACE DO PAINEL ---
+# --- VIEW ---
 class PontoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
     async def registrar(self, interaction: discord.Interaction, tipo: str):
         uid = str(interaction.user.id)
-        agora = datetime.now()
-        data_hoje = agora.strftime("%d/%m/%Y")
-        hora_atual = agora.strftime("%H:%M:%S")
+        agora_br = datetime.now(BR_TZ)
+        data_hoje = agora_br.strftime("%d/%m/%Y")
+        hora_atual = agora_br.strftime("%H:%M:%S")
 
         dados = carregar_dados()
-        
-        # Estrutura de dados
-        if uid not in dados: 
-            dados[uid] = {"nome": interaction.user.display_name, "registros": {}}
-        if data_hoje not in dados[uid]["registros"]: 
-            dados[uid]["registros"][data_hoje] = {}
+        if uid not in dados: dados[uid] = {"nome": interaction.user.display_name, "registros": {}}
+        if data_hoje not in dados[uid]["registros"]: dados[uid]["registros"][data_hoje] = {}
         
         regs = dados[uid]["registros"][data_hoje]
 
-        # --- VALIDAÇÕES DE SEGURANÇA ---
+        # Travas de Segurança (Mensagens de erro somem em 5s)
         if tipo == "Entrada":
             if "Entrada" in regs and "Saída" not in regs:
-                return await interaction.response.send_message("❌ **Você já possui um ponto ativo!** Encerre o atual primeiro.", ephemeral=True)
-            if "Saída" in regs:
-                regs.clear() # Limpa para permitir um novo turno no mesmo dia
-
+                return await interaction.response.send_message("❌ Você já possui um ponto ativo!", delete_after=5)
+            if "Saída" in regs: regs.clear()
         elif tipo == "Saída":
             if "Entrada" not in regs:
-                return await interaction.response.send_message("❌ **Você não tem um ponto ativo!** Bata a entrada primeiro.", ephemeral=True)
+                return await interaction.response.send_message("❌ Você não tem um ponto ativo!", delete_after=5)
             if "Saída" in regs:
-                return await interaction.response.send_message("❌ **Este ponto já foi encerrado.**", ephemeral=True)
+                return await interaction.response.send_message("❌ Ponto já encerrado.", delete_after=5)
 
-        # Gravação
         regs[tipo] = hora_atual
         salvar_dados(dados)
 
-        # Resposta no canal (Efêmera)
-        cor = discord.Color.green() if tipo == "Entrada" else discord.Color.red()
-        await interaction.response.send_message(f"✅ {tipo} registrada com sucesso às `{hora_atual}`!", ephemeral=True)
+        # Confirmação no canal que desaparece em 5 segundos
+        emoji = "🟢" if tipo == "Entrada" else "🔴"
+        await interaction.response.send_message(f"{emoji} **{tipo} registrada!** Verifique seu comprovante na DM.", delete_after=5)
 
-        # --- ENVIO INDEPENDENTE PARA DM ---
+        # Envio para DM (Permanente)
         try:
-            embed_dm = discord.Embed(
-                title="📄 Comprovante de Ponto",
-                description="Este é o seu registro oficial de jornada.",
-                color=cor,
-                timestamp=agora
-            )
-            embed_dm.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+            cor = discord.Color.green() if tipo == "Entrada" else discord.Color.red()
+            embed_dm = discord.Embed(title="📄 Comprovante de Ponto", color=cor, timestamp=agora_br)
             embed_dm.add_field(name="📅 Data", value=data_hoje, inline=True)
             embed_dm.add_field(name="📌 Evento", value=tipo, inline=True)
             embed_dm.add_field(name="⏰ Horário", value=f"`{hora_atual}`", inline=False)
 
             if tipo == "Saída":
                 total = calcular_tempo_exato(regs)
-                embed_dm.add_field(name="⌛ Tempo Total Trabalhado", value=f"**{total}**", inline=False)
-                embed_dm.set_footer(text="Turno encerrado. Bom descanso!")
-            else:
-                embed_dm.set_footer(text="Turno iniciado. Bom trabalho!")
+                embed_dm.add_field(name="⌛ Tempo Total", value=f"**{total}**", inline=False)
 
             await interaction.user.send(embed=embed_dm)
+        except:
+            pass
 
-        except discord.Forbidden:
-            await interaction.followup.send("⚠️ **Atenção:** Não consegui enviar o comprovante na sua DM. Verifique se suas mensagens privadas estão abertas!", ephemeral=True)
-
-    @discord.ui.button(label="Entrada", style=discord.ButtonStyle.success, emoji="📥", custom_id="bt_ent_idp")
+    @discord.ui.button(label="Entrada", style=discord.ButtonStyle.success, emoji="📥", custom_id="btn_e_vfinal")
     async def entrada(self, i, b): await self.registrar(i, "Entrada")
 
-    @discord.ui.button(label="Saída", style=discord.ButtonStyle.danger, emoji="📤", custom_id="bt_sai_idp")
+    @discord.ui.button(label="Saída", style=discord.ButtonStyle.danger, emoji="📤", custom_id="btn_s_vfinal")
     async def saida(self, i, b): await self.registrar(i, "Saída")
 
-# --- COMANDO DE INICIALIZAÇÃO ---
-@bot.tree.command(name="ponto", description="Abre o painel de ponto com comprovante na DM")
+@bot.tree.command(name="ponto", description="Painel Limpo com Auto-Delete")
 async def ponto(interaction: discord.Interaction):
     embed = discord.Embed(
         title="🗓️ Registro de Jornada",
-        description="Utilize os botões abaixo para gerenciar seu horário.\nO comprovante será enviado automaticamente no seu privado.",
+        description="Clique abaixo para registrar. As confirmações somem automaticamente em 5 segundos.",
         color=0x2b2d31
     )
     await interaction.response.send_message(embed=embed, view=PontoView())
