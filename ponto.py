@@ -77,20 +77,23 @@ class PontoView(discord.ui.View):
             v_venda.add_item(discord.ui.Button(label="Assinar Agora", url=LINK_PAGAMENTO))
             return await interaction.response.send_message("🔒 Servidor sem assinatura ativa.", view=v_venda, ephemeral=True)
 
-        servidor = dados["servidores"][sid]
-        if uid in servidor["usuarios"] and servidor["usuarios"][uid].get("entrada"):
+        servidor_db = dados["servidores"][sid]
+        if uid in servidor_db["usuarios"] and servidor_db["usuarios"][uid].get("entrada"):
              return await interaction.response.send_message("⚠️ Você já tem uma entrada ativa!", ephemeral=True, delete_after=8)
 
         agora = datetime.now(BR_TZ)
-        if uid not in servidor["usuarios"]: servidor["usuarios"][uid] = {}
-        servidor["usuarios"][uid]["entrada"] = agora.strftime(FMT_HORA)
+        if uid not in servidor_db["usuarios"]: servidor_db["usuarios"][uid] = {}
+        servidor_db["usuarios"][uid]["entrada"] = agora.strftime(FMT_HORA)
         salvar_dados(dados)
 
+        # Criar Embed de Entrada com Nome do Servidor
         embed = discord.Embed(title="📄 Comprovante de Ponto", color=discord.Color.green())
+        embed.set_thumbnail(url=interaction.guild.icon.url if interaction.guild.icon else None)
+        embed.add_field(name="🏢 Empresa/Servidor", value=f"**{interaction.guild.name}**", inline=False)
         embed.add_field(name="📅 Data", value=agora.strftime("%d/%m/%Y"), inline=True)
         embed.add_field(name="📌 Evento", value="Entrada", inline=True)
         embed.add_field(name="⏰ Horário", value=f"`{agora.strftime('%H:%M:%S')}`", inline=False)
-        embed.set_footer(text=f"Hoje às {agora.strftime('%H:%M')}")
+        embed.set_footer(text=f"ID do Servidor: {sid}")
         
         try:
             await interaction.user.send(embed=embed)
@@ -107,11 +110,11 @@ class PontoView(discord.ui.View):
         if sid not in dados["servidores"]:
              return await interaction.response.send_message("🔒 Servidor sem assinatura.", ephemeral=True)
 
-        servidor = dados["servidores"][sid]
-        if uid not in servidor["usuarios"] or not servidor["usuarios"][uid].get("entrada"):
+        servidor_db = dados["servidores"][sid]
+        if uid not in servidor_db["usuarios"] or not servidor_db["usuarios"][uid].get("entrada"):
              return await interaction.response.send_message("⚠️ Você precisa registrar entrada primeiro.", ephemeral=True, delete_after=8)
 
-        entrada_str = servidor["usuarios"][uid]["entrada"]
+        entrada_str = servidor_db["usuarios"][uid]["entrada"]
         entrada_dt = BR_TZ.localize(datetime.strptime(entrada_str, FMT_HORA))
         agora = datetime.now(BR_TZ)
         
@@ -120,15 +123,18 @@ class PontoView(discord.ui.View):
         minutos, segundos = divmod(rem, 60)
         tempo_total = f"{horas}h {minutos}m {segundos}s"
 
-        servidor["usuarios"][uid]["entrada"] = None
+        servidor_db["usuarios"][uid]["entrada"] = None
         salvar_dados(dados)
 
+        # Criar Embed de Saída com Nome do Servidor
         embed = discord.Embed(title="📄 Comprovante de Ponto", color=discord.Color.red())
+        embed.set_thumbnail(url=interaction.guild.icon.url if interaction.guild.icon else None)
+        embed.add_field(name="🏢 Empresa/Servidor", value=f"**{interaction.guild.name}**", inline=False)
         embed.add_field(name="📅 Data", value=agora.strftime("%d/%m/%Y"), inline=True)
         embed.add_field(name="📌 Evento", value="Saída", inline=True)
         embed.add_field(name="⏰ Horário", value=f"`{agora.strftime('%H:%M:%S')}`", inline=False)
         embed.add_field(name="⏳ Tempo Total", value=f"**{tempo_total}**", inline=False)
-        embed.set_footer(text=f"Hoje às {agora.strftime('%H:%M')}")
+        embed.set_footer(text=f"ID do Servidor: {sid}")
 
         try:
             await interaction.user.send(embed=embed)
