@@ -8,14 +8,16 @@ from dotenv import load_dotenv
 # --- 1. CONFIGURAÇÕES ---
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
-BR_TZ = pytz.timezone('America/Sao_Paulo')
+BR_TZ = pytz.timezone('America/Sao_Paulo') # Fuso horário do Brasil
 
 # ⚠️ AJUSTE SEUS DADOS AQUI
 ID_DONO = 123456789012345678  # Seu ID numérico
 LINK_PAGAMENTO = "https://seu-link-aqui.com" 
 SENHA_LIBERACAO = "PONTO_2024_PRO" 
 
-# --- 2. BANCO DE DADOS ---
+# --- 2. BANCO DE DADOS (AVANÇADO) ---
+FMT_HORA = "%Y-%m-%d %H:%M:%S"
+
 def carregar_dados():
     try:
         if not os.path.exists('database.json'):
@@ -61,22 +63,90 @@ class TicketOpenView(discord.ui.View):
         await canal.send(embed=embed, view=TicketControlView())
         await interaction.response.send_message(f"Ticket criado: {canal.mention}", ephemeral=True)
 
+# --- NOVA CLASSE PONTO (PROFISSIONAL E DM) ---
 class PontoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-    async def registrar(self, interaction: discord.Interaction, tipo: str):
+
+    async def enviar_comprovante_dm(self, interaction: discord.Interaction, tipo: str, embed: discord.Embed):
+        """Tenta enviar o embed na DM. Se falhar (DM fechada), avisa no canal."""
+        try:
+            await interaction.user.send(embed=embed)
+            # Resposta efêmera no canal só para confirmar
+            await interaction.response.send_message(f"✅ {tipo} registrada! Comprovante enviado na sua DM.", ephemeral=True)
+        except discord.Forbidden:
+            # Se a DM estiver fechada, envia o embed aqui mesmo, mas efêmero
+            embed.set_footer(text="⚠️ Abra sua DM para receber os próximos comprovantes privados.")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="Entrada", style=discord.ButtonStyle.success, custom_id="btn_ent")
+    async def ent(self, interaction: discord.Interaction, button: discord.ui.Button):
         sid = str(interaction.guild.id)
+        uid = str(interaction.user.id)
         dados = carregar_dados()
+
+        # 1. Verificação de Licença
         if sid not in dados["servidores"]:
             v_venda = discord.ui.View()
             v_venda.add_item(discord.ui.Button(label="Assinar Agora", url=LINK_PAGAMENTO))
             return await interaction.response.send_message("🔒 Servidor sem assinatura ativa.", view=v_venda, ephemeral=True)
-        agora = datetime.now(BR_TZ).strftime("%H:%M:%S")
-        await interaction.response.send_message(f"✅ {tipo} registrada: `{agora}`", ephemeral=True)
-    @discord.ui.button(label="Entrada", style=discord.ButtonStyle.success, custom_id="btn_ent")
-    async def ent(self, i, b): await self.registrar(i, "Entrada")
+
+        # 2. Lógica de Entrada
+        servidor = dados["servidores"][sid]
+        if uid in servidor["usuarios"] and servidor["usuarios"][uid].get("entrada"):
+             return await interaction.response.send_message("⚠️ Você já registrou entrada. Registre a saída primeiro.", ephemeral=True)
+
+        agora = datetime.now(BR_TZ)
+        servidor["usuarios"][uid] = {"entrada": agora.strftime(FMT_HORA)}
+        salvar_dados(dados)
+
+        # 3. Criar Embed de Entrada (Estilo Imagem 7)
+        embed = discord.Embed(title="📄 Comprovante de Ponto", color=discord.Color.green())
+        embed.add_field(name="📅 Data", value=agora.strftime("%d/%m/%Y"), inline=True)
+        embed.add_field(name="📌 Evento", value="Entrada", inline=True)
+        embed.add_field(name="⏰ Horário", value=f"`{agora.strftime('%H:%M:%S')}`", inline=False)
+        embed.set_footer(text=f"Hoje às {agora.strftime('%H:%M')}")
+        
+        await self.enviar_comprovante_dm(interaction, "Entrada", embed)
+
     @discord.ui.button(label="Saída", style=discord.ButtonStyle.danger, custom_id="btn_sai")
-    async def sai(self, i, b): await self.registrar(i, "Saída")
+    async def sai(self, interaction: discord.Interaction, button: discord.ui.Button):
+        sid = str(interaction.guild.id)
+        uid = str(interaction.user.id)
+        dados = carregar_dados()
+
+        # 1. Verificação de Licença
+        if sid not in dados["servidores"]:
+             return await interaction.response.send_message("🔒 Servidor sem assinatura.", ephemeral=True)
+
+        # 2. Lógica de Saída e Cálculo de Tempo
+        servidor = dados["servidores"][sid]
+        if uid not in servidor["usuarios"] or not servidor["usuarios"][uid].get("entrada"):
+             return await interaction.response.send_message("⚠️ Você precisa registrar entrada primeiro.", ephemeral=True)
+
+        entrada_str = servidor["usuarios"][uid]["entrada"]
+        entrada_dt = BR_TZ.localize(datetime.strptime(entrada_str, FMT_HORA))
+        agora = datetime.now(BR_TZ)
+        
+        # Calcular tempo total
+        delta = agora - entrada_dt
+        horas, rem = divmod(delta.seconds, 3600)
+        minutos, segundos = divmod(rem, 60)
+        tempo_total = f"{horas}h {minutos}m {segundos}s"
+
+        # Limpar registro de entrada
+        servidor["usuarios"][uid]["entrada"] = None
+        salvar_dados(dados)
+
+        # 3. Criar Embed de Saída (Estilo Imagem 7 com Tempo Total)
+        embed = discord.Embed(title="📄 Comprovante de Ponto", color=discord.Color.red())
+        embed.add_field(name="📅 Data", value=agora.strftime("%d/%m/%Y"), inline=True)
+        embed.add_field(name="📌 Evento", value="Saída", inline=True)
+        embed.add_field(name="⏰ Horário", value=f"`{agora.strftime('%H:%M:%S')}`", inline=False)
+        embed.add_field(name="⏳ Tempo Total", value=f"**{tempo_total}**", inline=False)
+        embed.set_footer(text=f"Hoje às {agora.strftime('%H:%M')}")
+
+        await self.enviar_comprovante_dm(interaction, "Saída", embed)
 
 # --- 4. CLASSE DO BOT ---
 class PontoBot(commands.Bot):
@@ -93,10 +163,10 @@ class PontoBot(commands.Bot):
 bot = PontoBot()
 
 # --- 5. COMANDOS ---
-
 @bot.tree.command(name="ponto", description="Abre o painel de ponto")
 async def ponto(interaction: discord.Interaction):
-    await interaction.response.send_message("🗓️ Central de Ponto", view=PontoView())
+    embed = discord.Embed(title="🗓️ Central de Ponto", description="Use os botões abaixo para registrar sua jornada.", color=0x2b2d31)
+    await interaction.response.send_message(embed=embed, view=PontoView())
 
 @bot.tree.command(name="setup_suporte", description="Configura os tickets")
 async def setup_suporte(interaction: discord.Interaction):
@@ -122,7 +192,10 @@ async def ativar(interaction: discord.Interaction, chave: str):
     chave_limpa = chave.strip()
     dados = carregar_dados()
     if "chaves_ativas" in dados and chave_limpa in dados["chaves_ativas"]:
-        dados["servidores"][str(interaction.guild.id)] = {"usuarios": {}}
+        # Se o servidor não existe na estrutura, cria
+        if str(interaction.guild.id) not in dados["servidores"]:
+            dados["servidores"][str(interaction.guild.id)] = {"usuarios": {}}
+        
         dados["chaves_ativas"].remove(chave_limpa)
         salvar_dados(dados)
         await interaction.response.send_message("🎉 Licença Pro ativada!", ephemeral=True)
