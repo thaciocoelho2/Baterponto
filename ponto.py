@@ -36,43 +36,22 @@ def salvar_dados(dados):
 
 # --- 3. INTERFACES (VIEWS) ---
 
-class TicketControlView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-    @discord.ui.button(label="🔒 Fechar Ticket", style=discord.ButtonStyle.secondary, custom_id="close_tkt")
-    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("Encerrando atendimento em 3 segundos...", delete_after=3)
-        await asyncio.sleep(3)
-        await interaction.channel.delete()
-
-class TicketOpenView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-    @discord.ui.button(label="📩 Suporte / Resgatar Chave", style=discord.ButtonStyle.primary, custom_id="open_tkt")
-    async def open_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        guild = interaction.guild
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
-        }
-        canal = await guild.create_text_channel(f"ticket-{interaction.user.name}", overwrites=overwrites)
-        embed = discord.Embed(title="🎫 Suporte Ponto Bot", description="Use `/resgatar` com a senha do seu PDF.", color=discord.Color.blue())
-        await canal.send(embed=embed, view=TicketControlView())
-        await interaction.response.send_message(f"✅ Ticket criado: {canal.mention}", ephemeral=True, delete_after=8)
-
 class PontoView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.button(label="Entrada", style=discord.ButtonStyle.success, custom_id="btn_ent")
     async def ent(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Captura forçada dos dados para evitar erro de asteriscos vazios
-        guild_name = str(interaction.guild.name) if interaction.guild else "Servidor Desconhecido"
+        # REGRA 1: Verificar se está em canal de voz
+        if not interaction.user.voice or not interaction.user.voice.channel:
+            return await interaction.response.send_message(
+                "❌ **Acesso Negado:** Você precisa estar em um canal de voz deste servidor para iniciar o ponto.", 
+                ephemeral=True, delete_after=10
+            )
+
+        guild_name = str(interaction.guild.name)
         user_name = interaction.user.display_name
-        sid = str(interaction.guild.id)
-        uid = str(interaction.user.id)
-        
+        sid, uid = str(interaction.guild.id), str(interaction.user.id)
         dados = carregar_dados()
 
         if sid not in dados["servidores"]:
@@ -87,19 +66,14 @@ class PontoView(discord.ui.View):
         servidor_db["usuarios"][uid]["entrada"] = agora.strftime(FMT_HORA)
         salvar_dados(dados)
 
-        # EMBED DE ENTRADA CORRIGIDO
         embed = discord.Embed(title="📄 Comprovante de Ponto", color=discord.Color.green())
-        if interaction.guild.icon:
-            embed.set_thumbnail(url=interaction.guild.icon.url)
-
+        if interaction.guild.icon: embed.set_thumbnail(url=interaction.guild.icon.url)
         embed.add_field(name="🏢 Empresa/Servidor", value=f"**{guild_name}**", inline=False)
         embed.add_field(name="👤 Funcionário", value=f"**{user_name}**", inline=False)
         embed.add_field(name="📅 Data", value=agora.strftime("%d/%m/%Y"), inline=True)
         embed.add_field(name="📌 Evento", value="Entrada", inline=True)
         embed.add_field(name="⏰ Horário", value=f"`{agora.strftime('%H:%M:%S')}`", inline=False)
-        
-        # Rodapé sem o ID do Servidor
-        embed.set_footer(text=f"Registro realizado com sucesso")
+        embed.set_footer(text="Registro realizado com sucesso")
         
         try:
             await interaction.user.send(embed=embed)
@@ -109,78 +83,97 @@ class PontoView(discord.ui.View):
 
     @discord.ui.button(label="Saída", style=discord.ButtonStyle.danger, custom_id="btn_sai")
     async def sai(self, interaction: discord.Interaction, button: discord.ui.Button):
-        guild_name = str(interaction.guild.name) if interaction.guild else "Servidor Desconhecido"
-        user_name = interaction.user.display_name
-        sid = str(interaction.guild.id)
-        uid = str(interaction.user.id)
-        
-        dados = carregar_dados()
+        await processar_saida(interaction.user, interaction.guild)
+        if not interaction.response.is_done():
+            await interaction.response.send_message("✅ Saída processada.", ephemeral=True, delete_after=5)
 
-        if sid not in dados["servidores"]:
-             return await interaction.response.send_message("🔒 Servidor sem assinatura.", ephemeral=True)
+# Função auxiliar para processar a saída (usada pelo botão e pelo sistema automático)
+async def processar_saida(user, guild):
+    sid, uid = str(guild.id), str(user.id)
+    dados = carregar_dados()
+    
+    if sid not in dados["servidores"]: return
+    servidor_db = dados["servidores"][sid]
+    
+    if uid not in servidor_db["usuarios"] or not servidor_db["usuarios"][uid].get("entrada"):
+        return
 
-        servidor_db = dados["servidores"][sid]
-        if uid not in servidor_db["usuarios"] or not servidor_db["usuarios"][uid].get("entrada"):
-             return await interaction.response.send_message("⚠️ Registre a entrada primeiro.", ephemeral=True, delete_after=8)
+    entrada_str = servidor_db["usuarios"][uid]["entrada"]
+    entrada_dt = BR_TZ.localize(datetime.strptime(entrada_str, FMT_HORA))
+    agora = datetime.now(BR_TZ)
+    
+    delta = agora - entrada_dt
+    horas, rem = divmod(delta.seconds, 3600)
+    minutos, segundos = divmod(rem, 60)
+    tempo_total = f"{horas}h {minutos}m {segundos}s"
 
-        entrada_str = servidor_db["usuarios"][uid]["entrada"]
-        entrada_dt = BR_TZ.localize(datetime.strptime(entrada_str, FMT_HORA))
-        agora = datetime.now(BR_TZ)
-        
-        delta = agora - entrada_dt
-        horas, rem = divmod(delta.seconds, 3600)
-        minutos, segundos = divmod(rem, 60)
-        tempo_total = f"{horas}h {minutos}m {segundos}s"
+    servidor_db["usuarios"][uid]["entrada"] = None
+    salvar_dados(dados)
 
-        servidor_db["usuarios"][uid]["entrada"] = None
-        salvar_dados(dados)
+    embed = discord.Embed(title="📄 Comprovante de Ponto (Encerrado)", color=discord.Color.red())
+    if guild.icon: embed.set_thumbnail(url=guild.icon.url)
+    embed.add_field(name="🏢 Empresa/Servidor", value=f"**{guild.name}**", inline=False)
+    embed.add_field(name="👤 Funcionário", value=f"**{user.display_name}**", inline=False)
+    embed.add_field(name="⏰ Horário Saída", value=f"`{agora.strftime('%H:%M:%S')}`", inline=True)
+    embed.add_field(name="⏳ Tempo Total", value=f"**{tempo_total}**", inline=False)
+    embed.set_footer(text="Jornada encerrada")
 
-        # EMBED DE SAÍDA CORRIGIDO
-        embed = discord.Embed(title="📄 Comprovante de Ponto", color=discord.Color.red())
-        if interaction.guild.icon:
-            embed.set_thumbnail(url=interaction.guild.icon.url)
-
-        embed.add_field(name="🏢 Empresa/Servidor", value=f"**{guild_name}**", inline=False)
-        embed.add_field(name="👤 Funcionário", value=f"**{user_name}**", inline=False)
-        embed.add_field(name="📅 Data", value=agora.strftime("%d/%m/%Y"), inline=True)
-        embed.add_field(name="📌 Evento", value="Saída", inline=True)
-        embed.add_field(name="⏰ Horário", value=f"`{agora.strftime('%H:%M:%S')}`", inline=False)
-        embed.add_field(name="⏳ Tempo Total", value=f"**{tempo_total}**", inline=False)
-        
-        embed.set_footer(text=f"Jornada encerrada com sucesso")
-
-        try:
-            await interaction.user.send(embed=embed)
-            await interaction.response.send_message(f"✅ Saída registrada! Verifique sua DM.", ephemeral=True, delete_after=8)
-        except discord.Forbidden:
-            await interaction.response.send_message(embed=embed, ephemeral=True, delete_after=8)
+    try:
+        await user.send(embed=embed)
+    except:
+        pass
 
 # --- 4. CLASSE DO BOT ---
 class PontoBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.all()
         super().__init__(command_prefix="!", intents=intents)
+        self.monitoramento_voz = {} # Dicionário para controlar os 5 minutos
+
     async def setup_hook(self):
-        self.add_view(TicketOpenView())
-        self.add_view(TicketControlView())
         self.add_view(PontoView())
         await self.tree.sync()
         print(f"✅ Bot operacional: {self.user}")
 
+    # REGRA 2: Monitoramento de saída da Call (5 minutos)
+    async def on_voice_state_update(self, member, before, after):
+        if member.bot: return
+        sid, uid = str(member.guild.id), str(member.id)
+        
+        # Se saiu de um canal e não entrou em nenhum outro do servidor
+        if before.channel and not after.channel:
+            dados = carregar_dados()
+            # Verifica se o usuário tem um ponto ativo
+            if sid in dados["servidores"] and uid in dados["servidores"][sid]["usuarios"]:
+                if dados["servidores"][sid]["usuarios"][uid].get("entrada"):
+                    # Inicia contagem de 5 minutos (300 segundos)
+                    task = asyncio.create_task(self.aguardar_retorno(member, member.guild))
+                    self.monitoramento_voz[uid] = task
+
+        # Se voltou para qualquer canal de voz, cancela o encerramento automático
+        if not before.channel and after.channel:
+            if uid in self.monitoramento_voz:
+                self.monitoramento_voz[uid].cancel()
+                del self.monitoramento_voz[uid]
+
+    async def aguardar_retorno(self, member, guild):
+        try:
+            await asyncio.sleep(300) # 5 minutos
+            # Se chegou aqui, o usuário não voltou. Encerra o ponto.
+            await processar_saida(member, guild)
+            try:
+                await member.send("⚠️ **Aviso:** Seu ponto foi encerrado automaticamente pois você ficou fora de um canal de voz por mais de 5 minutos.")
+            except: pass
+        except asyncio.CancelledError:
+            pass # Usuário voltou para a call a tempo
+
 bot = PontoBot()
 
-# --- 5. COMANDOS ---
+# --- 5. COMANDOS (ATIVAR/RESGATAR/PONTO) ---
 @bot.tree.command(name="ponto", description="Abre o painel de ponto")
 async def ponto(interaction: discord.Interaction):
-    embed = discord.Embed(title="🗓️ Central de Ponto", description="Registre sua entrada ou saída pelos botões abaixo.", color=0x2b2d31)
+    embed = discord.Embed(title="🗓️ Central de Ponto", description="É obrigatório estar em um canal de voz para registrar entrada.", color=0x2b2d31)
     await interaction.response.send_message(embed=embed, view=PontoView())
-
-@bot.tree.command(name="setup_suporte", description="Configura os tickets")
-async def setup_suporte(interaction: discord.Interaction):
-    if interaction.user.id != ID_DONO: return
-    embed = discord.Embed(title="🆘 Suporte & Resgate", description="Abra um ticket para suporte ou resgate de chaves.", color=discord.Color.blue())
-    await interaction.channel.send(embed=embed, view=TicketOpenView())
-    await interaction.response.send_message("Painel configurado!", ephemeral=True, delete_after=8)
 
 @bot.tree.command(name="resgatar", description="Resgate sua chave")
 async def resgatar(interaction: discord.Interaction, senha: str):
