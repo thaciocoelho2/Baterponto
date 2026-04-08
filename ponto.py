@@ -1,150 +1,89 @@
-import discord
-from discord.ext import commands
-from discord import app_commands
-import json
-import os
-from datetime import datetime
-import pytz
-from dotenv import load_dotenv
+import uuid # Para gerar chaves aleatórias únicas
 
-# --- CONFIGURAÇÕES BÁSICAS ---
-load_dotenv()
-TOKEN = os.getenv('DISCORD_TOKEN')
-BR_TZ = pytz.timezone('America/Sao_Paulo')
+# --- CONFIGURAÇÃO DA SENHA MESTRE (Mude toda semana se quiser) ---
+SENHA_LIBERACAO = "PONTO_2024_PRO" 
 
-# ⚠️ AJUSTE ESTES DOIS CAMPOS ABAIXO:
-ID_DONO = 1490046139766935612  # Coloque seu ID do Discord aqui
-LINK_MERCADO_PAGO = "https://www.mercadopago.com.br/subscriptions/checkout?preapproval_plan_id=78923a6aa8834e85955831f76868c891" # Seu link de assinatura
-
-class PontoBot(commands.Bot):
-    def __init__(self):
-        intents = discord.Intents.default()
-        intents.members = True 
-        intents.message_content = True
-        super().__init__(command_prefix="!", intents=intents)
-
-    async def setup_hook(self):
-        await self.tree.sync()
-        print(f"✅ Bot operando como: {self.user}")
-
-bot = PontoBot()
-
-# --- FUNÇÕES DE BANCO DE DADOS ---
-def carregar_dados():
-    try:
-        with open('database.json', 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except: return {"servidores": {}, "chaves_ativas": []}
-
-def salvar_dados(dados):
-    with open('database.json', 'w', encoding='utf-8') as f:
-        json.dump(dados, f, indent=4, ensure_ascii=False)
-
-def calcular_tempo(regs):
-    fmt = "%H:%M:%S"
-    try:
-        inicio = datetime.strptime(regs["Entrada"], fmt)
-        fim = datetime.strptime(regs["Saída"], fmt)
-        s = int((fim - inicio).total_seconds())
-        return f"{s // 3600}h {(s % 3600) // 60}m {s % 60}s"
-    except: return "Erro no cálculo"
-
-# --- INTERFACE DE VENDAS (PARA QUEM NÃO PAGOU) ---
-class VendaView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        self.add_item(discord.ui.Button(label="Adquirir Plano Pro (R$ 20/mês)", url=LINK_MERCADO_PAGO))
-
-# --- INTERFACE DO PONTO (BOTÕES) ---
-class PontoView(discord.ui.View):
+# --- VIEW DO TICKET (O BOTÃO QUE FICA NO CANAL) ---
+class TicketOpenView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    async def registrar(self, interaction: discord.Interaction, tipo: str):
-        sid = str(interaction.guild.id)
-        uid = str(interaction.user.id)
-        dados = carregar_dados()
-
-        # VERIFICAÇÃO AUTOMÁTICA DE LICENÇA
-        if sid not in dados["servidores"]:
-            embed_venda = discord.Embed(
-                title="🔒 Funcionalidade Bloqueada",
-                description="Este servidor não possui uma assinatura ativa.\n\nAssine agora para liberar o registro de ponto e comprovantes na DM!",
-                color=discord.Color.orange()
-            )
-            return await interaction.response.send_message(embed=embed_venda, view=VendaView(), ephemeral=True)
-
-        agora_br = datetime.now(BR_TZ)
-        data_hoje = agora_br.strftime("%d/%m/%Y")
-        hora_atual = agora_br.strftime("%H:%M:%S")
-
-        # ORGANIZAÇÃO DOS DADOS
-        if uid not in dados["servidores"][sid]["usuarios"]:
-            dados["servidores"][sid]["usuarios"][uid] = {"nome": interaction.user.display_name, "registros": {}}
-        if data_hoje not in dados["servidores"][sid]["usuarios"][uid]["registros"]:
-            dados["servidores"][sid]["usuarios"][uid]["registros"][data_hoje] = {}
+    @discord.ui.button(label="📩 Abrir Ticket de Suporte", style=discord.ButtonStyle.primary, custom_id="open_ticket")
+    async def open_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        guild = interaction.guild
+        user = interaction.user
         
-        regs = dados["servidores"][sid]["usuarios"][uid]["registros"][data_hoje]
+        # Nome do canal do ticket
+        channel_name = f"ticket-{user.name}"
+        
+        # Verifica se já existe um ticket aberto para esse usuário
+        existing_channel = discord.utils.get(guild.channels, name=channel_name)
+        if existing_channel:
+            return await interaction.response.send_message(f"⚠️ Você já tem um ticket aberto: {existing_channel.mention}", ephemeral=True)
 
-        # REGRAS DE REGISTRO
-        if tipo == "Entrada" and "Entrada" in regs and "Saída" not in regs:
-            return await interaction.response.send_message("⚠️ Você já possui um ponto aberto!", ephemeral=True)
-        if tipo == "Saída" and "Entrada" not in regs:
-            return await interaction.response.send_message("⚠️ Você precisa bater a Entrada primeiro!", ephemeral=True)
+        # Permissões: O dono do bot e o cliente veem o canal. O resto do servidor não.
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        }
 
-        regs[tipo] = hora_atual
+        channel = await guild.create_text_channel(channel_name, overwrites=overwrites)
+        
+        embed = discord.Embed(
+            title="🎫 Suporte Ponto Bot",
+            description=(
+                f"Olá {user.mention}, como podemos ajudar?\n\n"
+                "**🤖 AUTO-RESGATE (MADRUGADA):**\n"
+                "Se você comprou e quer sua chave agora, digite:\n"
+                "`/resgatar senha: [SENHA_DO_PDF]`"
+            ),
+            color=discord.Color.blue()
+        )
+        
+        await channel.send(embed=embed, view=TicketControlView())
+        await interaction.response.send_message(f"✅ Ticket criado em {channel.mention}", ephemeral=True)
+
+# --- VIEW DENTRO DO TICKET (FECHAR TICKET) ---
+class TicketControlView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🔒 Fechar Ticket", style=discord.ButtonStyle.secondary, custom_id="close_ticket")
+    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("O ticket será fechado em 5 segundos...")
+        await asyncio.sleep(5)
+        await interaction.channel.delete()
+
+# --- COMANDO DE AUTO-RESGATE ---
+@bot.tree.command(name="resgatar", description="Resgate sua chave automaticamente usando a senha do PDF")
+async def resgatar(interaction: discord.Interaction, senha: str):
+    if senha == SENHA_LIBERACAO:
+        # Gera uma chave única aleatória
+        nova_chave = f"PROMO-{str(uuid.uuid4())[:8].upper()}"
+        
+        dados = carregar_dados()
+        dados["chaves_ativas"].append(nova_chave)
         salvar_dados(dados)
-
-        await interaction.response.send_message(f"✅ {tipo} registrada: `{hora_atual}`", ephemeral=True)
-
-        # ENVIO DO COMPROVANTE NA DM
-        try:
-            cor = discord.Color.green() if tipo == "Entrada" else discord.Color.red()
-            embed = discord.Embed(title="📄 Comprovante de Ponto", color=cor, timestamp=agora_br)
-            embed.set_author(name=interaction.guild.name, icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
-            embed.add_field(name="Evento", value=tipo, inline=True)
-            embed.add_field(name="Horário", value=hora_atual, inline=True)
-            if tipo == "Saída":
-                embed.add_field(name="Tempo Total", value=f"**{calcular_tempo(regs)}**", inline=False)
-            await interaction.user.send(embed=embed)
-        except: pass
-
-    @discord.ui.button(label="Entrada", style=discord.ButtonStyle.success, custom_id="btn_ent")
-    async def entrada(self, i, b): await self.registrar(i, "Entrada")
-
-    @discord.ui.button(label="Saída", style=discord.ButtonStyle.danger, custom_id="btn_sai")
-    async def saida(self, i, b): await self.registrar(i, "Saída")
-
-# --- COMANDOS ---
-
-@bot.tree.command(name="ponto", description="Abre o painel de registro de ponto")
-async def ponto(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="🗓️ Central de Ponto", 
-        description="Clique nos botões abaixo para registrar sua jornada.\nO comprovante será enviado no seu privado.",
-        color=0x2b2d31
-    )
-    # Aqui garantimos que os botões (PontoView) apareçam com a mensagem
-    await interaction.response.send_message(embed=embed, view=PontoView())
-
-@bot.tree.command(name="gerar_chave", description="Gera uma chave de acesso para venda")
-async def gerar_chave(interaction: discord.Interaction, chave: str):
-    if interaction.user.id != ID_DONO: return
-    dados = carregar_dados()
-    dados["chaves_ativas"].append(chave)
-    salvar_dados(dados)
-    await interaction.response.send_message(f"🔑 Chave `{chave}` gerada com sucesso!", ephemeral=True)
-
-@bot.tree.command(name="ativar", description="Ativa o bot neste servidor")
-async def ativar(interaction: discord.Interaction, chave: str):
-    dados = carregar_dados()
-    if chave in dados["chaves_ativas"]:
-        sid = str(interaction.guild.id)
-        dados["servidores"][sid] = {"nome": interaction.guild.name, "usuarios": {}}
-        dados["chaves_ativas"].remove(chave)
-        salvar_dados(dados)
-        await interaction.response.send_message("🎉 **Servidor Ativado!** O bot agora está pronto para uso.", ephemeral=True)
+        
+        embed = discord.Embed(
+            title="🔑 Chave Gerada com Sucesso!",
+            description=f"Sua chave de ativação é: `{nova_chave}`\n\n**Como usar:**\nNo seu servidor, use o comando `/ativar chave: {nova_chave}`",
+            color=discord.Color.green()
+        )
+        await interaction.response.send_message(embed=embed)
     else:
-        await interaction.response.send_message("❌ Chave inválida ou já utilizada.", ephemeral=True)
+        await interaction.response.send_message("❌ Senha incorreta. Verifique o PDF da sua compra.", ephemeral=True)
 
-bot.run(TOKEN)
+# --- COMANDO PARA VOCÊ CRIAR O PAINEL DE TICKETS ---
+@bot.tree.command(name="setup_suporte", description="Configura o painel de tickets no canal atual")
+async def setup_suporte(interaction: discord.Interaction):
+    if interaction.user.id != ID_DONO: return
+    
+    embed = discord.Embed(
+        title="🆘 Central de Ajuda & Licenciamento",
+        description="Precisa de ajuda ou quer resgatar sua chave de compra? Clique no botão abaixo para falar com nossa equipe.",
+        color=discord.Color.blue()
+    )
+    await interaction.response.send_message("Painel enviado!", ephemeral=True)
+    await interaction.channel.send(embed=embed, view=TicketOpenView())
