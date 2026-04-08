@@ -49,7 +49,6 @@ async def processar_saida(user, guild, automatico=False):
     delta = agora - entrada_dt
     segundos_trabalhados = int(delta.total_seconds())
     
-    # Acumular horas no banco
     total_antigo = servidor_db["usuarios"][uid].get("total_segundos", 0)
     servidor_db["usuarios"][uid]["total_segundos"] = total_antigo + segundos_trabalhados
     
@@ -62,7 +61,6 @@ async def processar_saida(user, guild, automatico=False):
 
     embed = discord.Embed(title="📄 Comprovante de Ponto", color=discord.Color.red())
     if guild.icon: embed.set_thumbnail(url=guild.icon.url)
-    
     embed.add_field(name="🏢 Empresa/Servidor", value=f"**{guild.name}**", inline=False)
     embed.add_field(name="👤 Funcionário", value=f"**{user.display_name}**", inline=False)
     embed.add_field(name="📅 Data", value=agora.strftime("%d/%m/%Y"), inline=True)
@@ -135,19 +133,17 @@ class PontoView(discord.ui.View):
             return await interaction.response.send_message("❌ Você ainda não possui horas registradas.", ephemeral=True, delete_after=5)
 
         total_segundos = dados["servidores"][sid]["usuarios"][uid].get("total_segundos", 0)
-        
-        # --- CORREÇÃO: CÁLCULO INCLUINDO SEGUNDOS ---
         horas, rem = divmod(total_segundos, 3600)
         minutos, segundos = divmod(rem, 60)
-        tempo_formatado = f"**{horas} horas, {minutos} minutos e {segundos} segundos**"
         
         embed = discord.Embed(title="📊 Relatório de Horas", color=discord.Color.blue())
         if interaction.guild.icon: embed.set_thumbnail(url=interaction.guild.icon.url)
         embed.add_field(name="🏢 Empresa", value=f"**{interaction.guild.name}**", inline=False)
         embed.add_field(name="👤 Funcionário", value=f"**{interaction.user.display_name}**", inline=False)
-        embed.add_field(name="⏳ Total Acumulado", value=tempo_formatado, inline=False)
+        embed.add_field(name="⏳ Total Acumulado", value=f"**{horas} horas, {minutos} minutos e {segundos} segundos**", inline=False)
         embed.set_footer(text="Cálculo exato baseado em todos os registros.")
 
+        # --- CORREÇÃO: ENVIAR APENAS UMA VEZ ---
         try:
             await interaction.user.send(embed=embed)
             await interaction.response.send_message("✅ Relatório enviado na DM!", ephemeral=True, delete_after=5)
