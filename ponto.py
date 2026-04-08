@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 # --- 1. CONFIGURAÇÕES ---
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
-BR_TZ = pytz.timezone('America/Sao_Paulo')
+BR_TZ = pytz.timezone('America/Sao_Paulo') # Fuso horário do Brasil
 FMT_HORA = "%Y-%m-%d %H:%M:%S"
 
 # ⚠️ AJUSTE SEUS DADOS AQUI
@@ -58,7 +58,9 @@ async def processar_saida(user, guild, automatico=False):
     servidor_db["usuarios"][uid]["entrada"] = None
     salvar_dados(dados)
 
-    embed = discord.Embed(title="📄 Comprovante de Ponto", color=discord.Color.red())
+    # Cria o Embed de Saída (Restaurado e Completo)
+    titulo = "📄 Comprovante de Ponto (Encerrado)" if automatico else "📄 Comprovante de Ponto"
+    embed = discord.Embed(title=titulo, color=discord.Color.red())
     if guild.icon: embed.set_thumbnail(url=guild.icon.url)
     embed.add_field(name="🏢 Empresa/Servidor", value=f"**{guild.name}**", inline=False)
     embed.add_field(name="👤 Funcionário", value=f"**{user.display_name}**", inline=False)
@@ -79,21 +81,27 @@ class PontoView(discord.ui.View):
         super().__init__(timeout=None)
         self.bot = bot_instance
 
-    @discord.ui.button(label="Entrada", style=discord.ButtonStyle.success, custom_id="btn_ent_v3")
+    @discord.ui.button(label="Entrada", style=discord.ButtonStyle.success, custom_id="btn_ent_restaurado_v1")
     async def ent(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # REGRA: Verificar se está em canal de voz
         if not interaction.user.voice or not interaction.user.voice.channel:
-            return await interaction.response.send_message("❌ Você precisa estar em call.", ephemeral=True, delete_after=5)
+            return await interaction.response.send_message("❌ **Acesso Negado:** Você precisa estar em um canal de voz deste servidor para iniciar o ponto.", ephemeral=True, delete_after=10)
 
+        guild_name = str(interaction.guild.name)
+        user_name = interaction.user.display_name
         sid, uid = str(interaction.guild.id), str(interaction.user.id)
         dados = carregar_dados()
 
+        # 1. Verificação de Licença
         if sid not in dados["servidores"]:
             return await interaction.response.send_message("🔒 Servidor sem assinatura ativa.", ephemeral=True)
 
         servidor_db = dados["servidores"][sid]
+        # 2. Lógica de Entrada (Proteção contra clique duplo)
         if uid in servidor_db["usuarios"] and servidor_db["usuarios"][uid].get("entrada"):
-             return await interaction.response.send_message("⚠️ Entrada já ativa.", ephemeral=True)
+             return await interaction.response.send_message("⚠️ Você já tem uma entrada ativa! Registre a saída primeiro.", ephemeral=True, delete_after=8)
 
+        # 3. Registrar Entrada
         agora = datetime.now(BR_TZ)
         if uid not in servidor_db["usuarios"]: servidor_db["usuarios"][uid] = {}
         servidor_db["usuarios"][uid]["entrada"] = agora.strftime(FMT_HORA)
@@ -101,17 +109,33 @@ class PontoView(discord.ui.View):
         servidor_db["nome"] = interaction.guild.name 
         salvar_dados(dados)
 
+        # --- NOVA ESTRUTURA DO COMPROVANTE DE ENTRADA (RESTAURADA IGUAL IMAGEM 13) ---
         embed = discord.Embed(title="📄 Comprovante de Ponto", color=discord.Color.green())
-        embed.add_field(name="🏢 Empresa/Servidor", value=f"**{interaction.guild.name}**", inline=False)
-        embed.add_field(name="👤 Funcionário", value=f"**{interaction.user.display_name}**", inline=False)
-        embed.add_field(name="⏰ Horário", value=f"`{agora.strftime('%H:%M:%S')}`", inline=False)
         
-        await interaction.user.send(embed=embed)
-        await interaction.response.send_message("✅ Entrada registrada!", ephemeral=True, delete_after=5)
+        # Adiciona o ícone do servidor no canto (thumbnail) se existir (Logo SICTEC)
+        if interaction.guild.icon:
+            embed.set_thumbnail(url=interaction.guild.icon.url)
 
-    @discord.ui.button(label="Saída", style=discord.ButtonStyle.danger, custom_id="btn_sai_v3")
+        embed.add_field(name="🏢 Empresa/Servidor", value=f"**{guild_name}**", inline=False)
+        embed.add_field(name="👤 Funcionário", value=f"**{user_name}**", inline=False)
+        embed.add_field(name="📅 Data", value=agora.strftime("%d/%m/%Y"), inline=True) # Campo restaurado
+        embed.add_field(name="📌 Evento", value="Entrada", inline=True) # Campo restaurado
+        embed.add_field(name="⏰ Horário", value=f"`{agora.strftime('%H:%M:%S')}`", inline=False)
+        embed.set_footer(text="Registro realizado com sucesso")
+        
+        # 4. Enviar DM e responder efemeramente (auto-delete 8s)
+        try:
+            await interaction.user.send(embed=embed)
+            await interaction.response.send_message(f"✅ Entrada registrada! Comprovante enviado na sua DM.", ephemeral=True, delete_after=8)
+        except discord.Forbidden:
+            # Se a DM estiver fechada, envia o embed aqui efemeramente
+            embed.set_footer(text=f"⚠️ ID do Servidor: {sid} | Abra sua DM para receber o comprovante privado.")
+            await interaction.response.send_message(embed=embed, ephemeral=True, delete_after=8)
+
+    @discord.ui.button(label="Saída", style=discord.ButtonStyle.danger, custom_id="btn_sai_restaurado_v1")
     async def sai(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(interaction.user.id)
+        # IMPORTANTE: Cancela timer de 5min se clicar manualmente
         if uid in self.bot.monitoramento_voz:
             self.bot.monitoramento_voz[uid].cancel()
             del self.bot.monitoramento_voz[uid]
@@ -128,20 +152,29 @@ class PontoBot(commands.Bot):
         self.monitoramento_voz = {}
 
     async def setup_hook(self):
+        # Torna as views persistentes (continuam funcionando após reiniciar)
         self.add_view(PontoView(self))
         await self.tree.sync()
-        print(f"✅ Bot Online: {self.user}")
+        print(f"✅ Bot operacional: {self.user}")
 
+    # REGRA 2: Monitoramento de saída da Call (5 minutos)
     async def on_voice_state_update(self, member, before, after):
         if member.bot: return
         sid, uid = str(member.guild.id), str(member.id)
+        
+        # Se saiu de um canal e não entrou em nenhum outro do servidor
         if before.channel and not after.channel:
             dados = carregar_dados()
+            # Verifica se o usuário tem um ponto ativo
             if sid in dados["servidores"] and uid in dados["servidores"][sid]["usuarios"]:
                 if dados["servidores"][sid]["usuarios"][uid].get("entrada"):
+                    # Cancela tarefa anterior se existir
                     if uid in self.monitoramento_voz: self.monitoramento_voz[uid].cancel()
+                    # Inicia contagem de 5 minutos (300 segundos)
                     task = asyncio.create_task(self.aguardar_retorno(member, member.guild))
                     self.monitoramento_voz[uid] = task
+
+        # Se voltou para qualquer canal de voz, cancela o encerramento automático
         if not before.channel and after.channel:
             if uid in self.monitoramento_voz:
                 self.monitoramento_voz[uid].cancel()
@@ -149,27 +182,28 @@ class PontoBot(commands.Bot):
 
     async def aguardar_retorno(self, member, guild):
         try:
-            await asyncio.sleep(300) 
+            await asyncio.sleep(300) # 5 minutos
+            # Se chegou aqui, o usuário não voltou. Encerra o ponto.
             await processar_saida(member, guild, automatico=True)
             if str(member.id) in self.monitoramento_voz: del self.monitoramento_voz[str(member.id)]
         except asyncio.CancelledError: pass
 
 bot = PontoBot()
 
-# --- 6. COMANDOS GERAIS ---
-@bot.tree.command(name="ponto", description="Painel de ponto")
+# --- 6. COMANDOS ---
+@bot.tree.command(name="ponto", description="Abre o painel de registro de ponto")
 async def ponto(interaction: discord.Interaction):
-    embed = discord.Embed(title="🗓️ Central de Ponto", description="Registre sua jornada abaixo.", color=0x2b2d31)
+    embed = discord.Embed(title="🗓️ Central de Ponto", description="Registre sua entrada ou saída pelos botões abaixo. **Obrigatório estar em canal de voz para entrada.**", color=0x2b2d31)
     await interaction.response.send_message(embed=embed, view=PontoView(bot))
 
-@bot.tree.command(name="resgatar", description="Gera chave (Dono)")
+@bot.tree.command(name="resgatar", description="Gera sua chave (Dono)")
 async def resgatar(interaction: discord.Interaction, senha: str):
     if senha.strip() == SENHA_LIBERACAO:
         nova = f"PROMO-{str(uuid.uuid4())[:8].upper()}"
         dados = carregar_dados()
         dados["chaves_ativas"].append(nova)
         salvar_dados(dados)
-        await interaction.response.send_message(f"🔑 Chave: `{nova}`", ephemeral=True)
+        await interaction.response.send_message(f"🔑 **Chave Gerada!**\nSua chave única de ativação é: `{nova}`\nCopie e use o comando `/ativar` no servidor do cliente.", ephemeral=True)
     else: await interaction.response.send_message("❌ Senha incorreta.", ephemeral=True)
 
 @bot.tree.command(name="ativar", description="Ativa licença no servidor")
@@ -180,40 +214,31 @@ async def ativar(interaction: discord.Interaction, chave: str):
         dados["servidores"][sid] = {"usuarios": {}, "nome": interaction.guild.name}
         dados["chaves_ativas"].remove(chave)
         salvar_dados(dados)
-        await interaction.response.send_message("🎉 Licença Ativada!", ephemeral=True)
-    else: await interaction.response.send_message("❌ Chave inválida.", ephemeral=True)
+        await interaction.response.send_message("🎉 **Sucesso!** Licença Pro ativada neste servidor.", ephemeral=True)
+    else: await interaction.response.send_message("❌ Chave inválida ou já utilizada.", ephemeral=True)
 
 # --- 7. COMANDOS DE GESTÃO (APENAS DONO) ---
-
-@bot.tree.command(name="listar_servidores", description="Lista todos os servidores ativos (Apenas Dono)")
+@bot.tree.command(name="listar_servidores", description="Lista servidores ativos (Dono)")
 async def listar_servidores(interaction: discord.Interaction):
-    if interaction.user.id != ID_DONO:
-        return await interaction.response.send_message("❌ Sem permissão.", ephemeral=True)
-    
+    if interaction.user.id != ID_DONO: return await interaction.response.send_message("❌ Sem permissão.", ephemeral=True)
     dados = carregar_dados()
-    if not dados["servidores"]:
-        return await interaction.response.send_message("Nenhum servidor ativo.", ephemeral=True)
-    
+    if not dados["servidores"]: return await interaction.response.send_message("Nenhum servidor ativo.", ephemeral=True)
     lista = ""
     for sid, info in dados["servidores"].items():
         nome = info.get("nome", "Desconhecido")
         lista += f"🏢 **Nome:** {nome} | **ID:** `{sid}`\n"
-    
     embed = discord.Embed(title="📊 Servidores Ativos", description=lista, color=discord.Color.blue())
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@bot.tree.command(name="suspender", description="Remove licença de um servidor (Apenas Dono)")
+@bot.tree.command(name="suspender", description="Remove licença (Dono)")
 async def suspender(interaction: discord.Interaction, id_servidor: str):
-    if interaction.user.id != ID_DONO:
-        return await interaction.response.send_message("❌ Sem permissão.", ephemeral=True)
-    
+    if interaction.user.id != ID_DONO: return await interaction.response.send_message("❌ Sem permissão.", ephemeral=True)
     dados = carregar_dados()
     if id_servidor in dados["servidores"]:
-        nome = dados["servidores"][id_servidor].get("nome", "este servidor")
+        nome = dados["servidores"][id_servidor].get("nome", id_servidor)
         del dados["servidores"][id_servidor]
         salvar_dados(dados)
         await interaction.response.send_message(f"🚫 Licença de **{nome}** (`{id_servidor}`) removida!", ephemeral=True)
-    else:
-        await interaction.response.send_message("❌ ID não encontrado.", ephemeral=True)
+    else: await interaction.response.send_message("❌ ID não encontrado.", ephemeral=True)
 
 bot.run(TOKEN)
