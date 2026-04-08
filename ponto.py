@@ -81,7 +81,6 @@ class PontoView(discord.ui.View):
     @discord.ui.button(label="Entrada", style=discord.ButtonStyle.success, custom_id="persistent_ent_v1")
     async def ent(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.voice:
-            # Corrigido: Adicionado delete_after para limpar a mensagem
             return await interaction.response.send_message("❌ Você precisa estar em um canal de voz.", ephemeral=True, delete_after=5)
 
         sid, uid = str(interaction.guild.id), str(interaction.user.id)
@@ -92,7 +91,6 @@ class PontoView(discord.ui.View):
 
         servidor_db = dados["servidores"][sid]
         if servidor_db["usuarios"].get(uid, {}).get("entrada"):
-             # Corrigido: Adicionado delete_after para limpar a mensagem
              return await interaction.response.send_message("⚠️ Você já possui uma entrada ativa.", ephemeral=True, delete_after=5)
 
         agora = datetime.now(BR_TZ)
@@ -113,7 +111,6 @@ class PontoView(discord.ui.View):
         
         try: await interaction.user.send(embed=embed)
         except: pass
-        # Corrigido: Adicionado delete_after para limpar a mensagem
         await interaction.response.send_message("✅ Entrada registrada!", ephemeral=True, delete_after=5)
 
     @discord.ui.button(label="Saída", style=discord.ButtonStyle.danger, custom_id="persistent_sai_v1")
@@ -123,16 +120,9 @@ class PontoView(discord.ui.View):
             self.bot.monitoramento_voz[uid].cancel()
             del self.bot.monitoramento_voz[uid]
 
-        await interaction.response.defer(ephemeral=True)
+        # Responde de forma efêmera e deleta apenas ESTA resposta após 5 segundos
+        await interaction.response.send_message("✅ Saída processada.", ephemeral=True, delete_after=5)
         await processar_saida(interaction.user, interaction.guild)
-        # Corrigido: Adicionado delete_after para limpar a mensagem
-        await interaction.followup.send("✅ Saída processada.", ephemeral=True)
-        
-        # Como o followup não tem delete_after nativo, usamos um pequeno truque de delete manual se necessário, 
-        # mas para mensagens efêmeras de followup, o padrão é o usuário clicar em "ignorar". 
-        # Adicionei a lógica para tentar deletar após 5 segundos:
-        msg = await interaction.original_response()
-        await msg.delete(delay=5)
 
 # --- 5. CLASSE DO BOT ---
 class PontoBot(commands.Bot):
@@ -175,6 +165,7 @@ bot = PontoBot()
 @bot.tree.command(name="ponto", description="Abre o painel de ponto")
 async def ponto(interaction: discord.Interaction):
     embed = discord.Embed(title="🗓️ Central de Ponto", description="Use os botões abaixo para registrar sua jornada.", color=0x2b2d31)
+    # A mensagem do comando /ponto não possui delete_after, por isso é PERMANENTE
     await interaction.response.send_message(embed=embed, view=PontoView(bot))
 
 @bot.tree.command(name="resgatar", description="Gera chave (Apenas Dono)")
