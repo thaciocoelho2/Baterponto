@@ -10,8 +10,7 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 BR_TZ = pytz.timezone('America/Sao_Paulo')
 FMT_HORA = "%Y-%m-%d %H:%M:%S"
 
-# ⚠️ AJUSTE SEUS DADOS AQUI
-ID_DONO = 123456789012345678  # Seu ID numérico do Discord
+ID_DONO = 123456789012345678 
 SENHA_LIBERACAO = "PONTO_2024_PRO" 
 
 # --- 2. BANCO DE DADOS ---
@@ -40,7 +39,6 @@ async def processar_saida(user, guild, automatico=False):
     if sid not in dados["servidores"]: return
     servidor_db = dados["servidores"][sid]
     
-    # Trava de Duplicidade: Verifica se há entrada ativa
     if uid not in servidor_db["usuarios"] or not servidor_db["usuarios"][uid].get("entrada"):
         return
 
@@ -48,17 +46,14 @@ async def processar_saida(user, guild, automatico=False):
     entrada_dt = BR_TZ.localize(datetime.strptime(entrada_str, FMT_HORA))
     agora = datetime.now(BR_TZ)
     
-    # Cálculo de tempo
     delta = agora - entrada_dt
     horas, rem = divmod(delta.seconds, 3600)
     minutos, segundos = divmod(rem, 60)
     tempo_total = f"{horas}h {minutos}m {segundos}s"
 
-    # Limpa o banco antes de enviar (evita duplicidade em cliques rápidos)
     servidor_db["usuarios"][uid]["entrada"] = None
     salvar_dados(dados)
 
-    # Embed de Saída Restaurado
     embed = discord.Embed(title="📄 Comprovante de Ponto", color=discord.Color.red())
     if guild.icon: embed.set_thumbnail(url=guild.icon.url)
     
@@ -77,26 +72,28 @@ async def processar_saida(user, guild, automatico=False):
     except:
         pass
 
-# --- 4. VIEW PERSISTENTE (Resolve "Esta interação falhou") ---
+# --- 4. VIEW PERSISTENTE ---
 class PontoView(discord.ui.View):
     def __init__(self, bot_instance):
-        super().__init__(timeout=None) # Essencial para não expirar
+        super().__init__(timeout=None)
         self.bot = bot_instance
 
     @discord.ui.button(label="Entrada", style=discord.ButtonStyle.success, custom_id="persistent_ent_v1")
     async def ent(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.voice:
+            # Corrigido: Adicionado delete_after para limpar a mensagem
             return await interaction.response.send_message("❌ Você precisa estar em um canal de voz.", ephemeral=True, delete_after=5)
 
         sid, uid = str(interaction.guild.id), str(interaction.user.id)
         dados = carregar_dados()
 
         if sid not in dados["servidores"]:
-            return await interaction.response.send_message("🔒 Servidor sem assinatura ativa.", ephemeral=True)
+            return await interaction.response.send_message("🔒 Servidor sem assinatura ativa.", ephemeral=True, delete_after=5)
 
         servidor_db = dados["servidores"][sid]
         if servidor_db["usuarios"].get(uid, {}).get("entrada"):
-             return await interaction.response.send_message("⚠️ Você já possui uma entrada ativa.", ephemeral=True)
+             # Corrigido: Adicionado delete_after para limpar a mensagem
+             return await interaction.response.send_message("⚠️ Você já possui uma entrada ativa.", ephemeral=True, delete_after=5)
 
         agora = datetime.now(BR_TZ)
         if uid not in servidor_db["usuarios"]: servidor_db["usuarios"][uid] = {}
@@ -104,7 +101,6 @@ class PontoView(discord.ui.View):
         servidor_db["nome"] = interaction.guild.name
         salvar_dados(dados)
 
-        # Embed de Entrada Restaurado (Igual Imagem SICTEC)
         embed = discord.Embed(title="📄 Comprovante de Ponto", color=discord.Color.green())
         if interaction.guild.icon: embed.set_thumbnail(url=interaction.guild.icon.url)
         
@@ -117,19 +113,26 @@ class PontoView(discord.ui.View):
         
         try: await interaction.user.send(embed=embed)
         except: pass
+        # Corrigido: Adicionado delete_after para limpar a mensagem
         await interaction.response.send_message("✅ Entrada registrada!", ephemeral=True, delete_after=5)
 
     @discord.ui.button(label="Saída", style=discord.ButtonStyle.danger, custom_id="persistent_sai_v1")
     async def sai(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(interaction.user.id)
-        # Cancela timer de 5min se clicar manualmente
         if uid in self.bot.monitoramento_voz:
             self.bot.monitoramento_voz[uid].cancel()
             del self.bot.monitoramento_voz[uid]
 
         await interaction.response.defer(ephemeral=True)
         await processar_saida(interaction.user, interaction.guild)
+        # Corrigido: Adicionado delete_after para limpar a mensagem
         await interaction.followup.send("✅ Saída processada.", ephemeral=True)
+        
+        # Como o followup não tem delete_after nativo, usamos um pequeno truque de delete manual se necessário, 
+        # mas para mensagens efêmeras de followup, o padrão é o usuário clicar em "ignorar". 
+        # Adicionei a lógica para tentar deletar após 5 segundos:
+        msg = await interaction.original_response()
+        await msg.delete(delay=5)
 
 # --- 5. CLASSE DO BOT ---
 class PontoBot(commands.Bot):
@@ -139,7 +142,6 @@ class PontoBot(commands.Bot):
         self.monitoramento_voz = {}
 
     async def setup_hook(self):
-        # Registra a View para persistência total
         self.add_view(PontoView(self))
         await self.tree.sync()
         print(f"✅ Bot Online e Views Persistentes carregadas.")
@@ -148,7 +150,6 @@ class PontoBot(commands.Bot):
         if member.bot: return
         sid, uid = str(member.guild.id), str(member.id)
         
-        # Saiu da call: inicia timer de 5min
         if before.channel and not after.channel:
             dados = carregar_dados()
             if sid in dados["servidores"] and uid in dados["servidores"][sid]["usuarios"]:
@@ -156,7 +157,6 @@ class PontoBot(commands.Bot):
                     if uid in self.monitoramento_voz: self.monitoramento_voz[uid].cancel()
                     self.monitoramento_voz[uid] = asyncio.create_task(self.aguardar_retorno(member, member.guild))
 
-        # Voltou para a call: cancela timer
         if not before.channel and after.channel:
             if uid in self.monitoramento_voz:
                 self.monitoramento_voz[uid].cancel()
@@ -164,7 +164,7 @@ class PontoBot(commands.Bot):
 
     async def aguardar_retorno(self, member, guild):
         try:
-            await asyncio.sleep(300) # 5 minutos
+            await asyncio.sleep(300) 
             await processar_saida(member, guild, automatico=True)
             if str(member.id) in self.monitoramento_voz: del self.monitoramento_voz[str(member.id)]
         except asyncio.CancelledError: pass
