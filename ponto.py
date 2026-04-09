@@ -14,9 +14,8 @@ FMT_HORA = "%Y-%m-%d %H:%M:%S"
 ID_DONO = 1490046139766935612 
 
 SENHA_LIBERACAO = "PONTO_2024_PRO" 
-# ID DO SEU SERVIDOR DE VENDAS/ATENDIMENTO
 ID_SERVIDOR_VENDAS = 1491423855334654002 
-LINK_SUPORTE = f"https://discord.gg/ZNHXTuKmAF" # Recomendo criar um convite permanente e colar aqui
+LINK_SUPORTE = f"https://discord.gg/ZNHXTuKmAF" 
 
 # --- 2. BANCO DE DADOS ---
 def carregar_dados():
@@ -84,19 +83,18 @@ class PontoView(discord.ui.View):
         super().__init__(timeout=None)
         self.bot = bot_instance
 
-    @discord.ui.button(label="Entrada", style=discord.ButtonStyle.success, custom_id="persistent_ent_v3")
+    @discord.ui.button(label="Entrada", style=discord.ButtonStyle.success, custom_id="persistent_ent_v4")
     async def ent(self, interaction: discord.Interaction, button: discord.ui.Button):
         sid, uid = str(interaction.guild.id), str(interaction.user.id)
         dados = carregar_dados()
 
-        # Direcionamento de Venda se não houver licença
         if sid not in dados["servidores"]:
             embed_venda = discord.Embed(
                 title="🔒 Licença Necessária",
-                description=f"Este servidor não possui uma licença ativa para o sistema de ponto.\n\nPara adquirir, entre em nosso servidor de atendimento:\n**ID do Servidor:** `{ID_SERVIDOR_VENDAS}`\n[Clique aqui para entrar]({LINK_SUPORTE})",
+                description=f"Para usar, entre em nosso atendimento:\n**ID:** `{ID_SERVIDOR_VENDAS}`\n[Clique aqui]({LINK_SUPORTE})",
                 color=discord.Color.gold()
             )
-            return await interaction.response.send_message(embed=embed_venda, ephemeral=True)
+            return await interaction.response.send_message(embed=embed_venda, ephemeral=True, delete_after=10)
 
         if not interaction.user.voice:
             return await interaction.response.send_message("❌ Você precisa estar em um canal de voz.", ephemeral=True, delete_after=5)
@@ -124,7 +122,7 @@ class PontoView(discord.ui.View):
         except: pass
         await interaction.response.send_message("✅ Entrada registrada!", ephemeral=True, delete_after=5)
 
-    @discord.ui.button(label="Saída", style=discord.ButtonStyle.danger, custom_id="persistent_sai_v3")
+    @discord.ui.button(label="Saída", style=discord.ButtonStyle.danger, custom_id="persistent_sai_v4")
     async def sai(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(interaction.user.id)
         if uid in self.bot.monitoramento_voz:
@@ -134,7 +132,7 @@ class PontoView(discord.ui.View):
         await interaction.response.send_message("✅ Saída processada.", ephemeral=True, delete_after=5)
         await processar_saida(interaction.user, interaction.guild)
 
-    @discord.ui.button(label="Calcular Horas", style=discord.ButtonStyle.secondary, custom_id="persistent_calc_v3")
+    @discord.ui.button(label="Calcular Horas", style=discord.ButtonStyle.secondary, custom_id="persistent_calc_v4")
     async def calc(self, interaction: discord.Interaction, button: discord.ui.Button):
         sid, uid = str(interaction.guild.id), str(interaction.user.id)
         dados = carregar_dados()
@@ -143,11 +141,18 @@ class PontoView(discord.ui.View):
             return await interaction.response.send_message("❌ Sem horas registradas.", ephemeral=True, delete_after=5)
 
         total_segundos = dados["servidores"][sid]["usuarios"][uid].get("total_segundos", 0)
+        
+        # --- CORREÇÃO: CÁLCULO E FORMATAÇÃO EXATA (IGUAL IMAGEM 6) ---
         horas, rem = divmod(total_segundos, 3600)
         minutos, segundos = divmod(rem, 60)
+        tempo_formatado = f"**{horas} horas, {minutos} minutos e {segundos} segundos**"
         
         embed = discord.Embed(title="📊 Relatório de Horas", color=discord.Color.blue())
-        embed.add_field(name="⏳ Total Acumulado", value=f"**{horas}h, {minutos}m e {segundos}s**", inline=False)
+        if interaction.guild.icon: embed.set_thumbnail(url=interaction.guild.icon.url)
+        embed.add_field(name="🏢 Empresa", value=f"**{interaction.guild.name}**", inline=False)
+        embed.add_field(name="👤 Funcionário", value=f"**{interaction.user.display_name}**", inline=False)
+        embed.add_field(name="⏳ Total Acumulado", value=tempo_formatado, inline=False)
+        embed.set_footer(text="Cálculo exato baseado em todos os registros.")
 
         try:
             await interaction.user.send(embed=embed)
@@ -191,7 +196,6 @@ class PontoBot(commands.Bot):
 bot = PontoBot()
 
 # --- 6. COMANDOS ---
-
 @bot.tree.command(name="ponto", description="Abre o painel de ponto")
 async def ponto(interaction: discord.Interaction):
     embed = discord.Embed(title="🗓️ Central de Ponto", description="Use os botões abaixo para registrar sua jornada.", color=0x2b2d31)
@@ -218,10 +222,10 @@ async def ativar(interaction: discord.Interaction, chave: str):
     else:
         embed_venda = discord.Embed(
             title="❌ Chave Inválida",
-            description=f"Não foi possível ativar. Para adquirir uma chave válida, entre em nosso atendimento:\n**ID:** `{ID_SERVIDOR_VENDAS}`\n[Link do Suporte]({LINK_SUPORTE})",
+            description=f"Não foi possível ativar. Para adquirir, entre em nosso atendimento:\n**ID:** `{ID_SERVIDOR_VENDAS}`\n[Link]({LINK_SUPORTE})",
             color=discord.Color.red()
         )
-        await interaction.response.send_message(embed=embed_venda, ephemeral=True)
+        await interaction.response.send_message(embed=embed_venda, ephemeral=True, delete_after=10)
 
 @bot.tree.command(name="listar_servidores", description="Lista servidores ativos")
 async def listar_servidores(interaction: discord.Interaction):
