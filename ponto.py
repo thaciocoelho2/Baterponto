@@ -97,9 +97,10 @@ class PontoView(discord.ui.View):
             return await interaction.response.send_message(embed=embed_licenca, ephemeral=True)
 
         if not interaction.user.voice:
-            # Resposta que apaga em 5 segundos no canal público
-            await interaction.response.defer(ephemeral=True)
-            return await interaction.channel.send(f"❌ {interaction.user.mention}, você deve estar em um canal de voz deste servidor para bater o ponto.", delete_after=5)
+            return await interaction.response.send_message(
+                f"❌ {interaction.user.mention}, você deve estar em um canal de voz deste servidor para bater o ponto.",
+                ephemeral=True
+            )
 
         servidor_db = dados["servidores"][sid]
         if servidor_db["usuarios"].get(uid, {}).get("entrada"):
