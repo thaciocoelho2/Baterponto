@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 # --- 1. CONFIGURAÇÕES ---
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
-# Fuso horário restaurado para garantir sincronia com o Brasil
 BR_TZ = pytz.timezone('America/Sao_Paulo')
 FMT_HORA = "%Y-%m-%d %H:%M:%S"
 
@@ -48,7 +47,6 @@ async def processar_saida(user, guild, automatico=False):
         return
 
     entrada_str = servidor_db["usuarios"][uid]["entrada"]
-    # Converte a string salva em objeto datetime com fuso horário
     entrada_dt = BR_TZ.localize(datetime.strptime(entrada_str, FMT_HORA))
     agora = datetime.now(BR_TZ)
     
@@ -74,7 +72,7 @@ async def processar_saida(user, guild, automatico=False):
     embed.add_field(name="⏰ Horário", value=f"`{agora.strftime('%H:%M:%S')}`", inline=False)
     embed.add_field(name="⏳ Tempo Total", value=f"**{tempo_sessao}**", inline=False)
     
-    footer = "Jornada encerrada por inatividade" if automatico else "Registro realizado com sucesso"
+    footer = "Jornada encerrada por inatividade no servidor" if automatico else "Registro realizado com sucesso"
     embed.set_footer(text=footer)
 
     try: await user.send(embed=embed)
@@ -86,7 +84,7 @@ class PontoView(discord.ui.View):
         super().__init__(timeout=None)
         self.bot = bot_instance
 
-    @discord.ui.button(label="Entrada", style=discord.ButtonStyle.success, custom_id="persistent_ent_v8")
+    @discord.ui.button(label="Entrada", style=discord.ButtonStyle.success, custom_id="persistent_ent_v9")
     async def ent(self, interaction: discord.Interaction, button: discord.ui.Button):
         sid, uid = str(interaction.guild.id), str(interaction.user.id)
         dados = carregar_dados()
@@ -99,8 +97,8 @@ class PontoView(discord.ui.View):
             )
             return await interaction.response.send_message(embed=embed_venda, ephemeral=True, delete_after=10)
 
-        if not interaction.user.voice:
-            return await interaction.response.send_message("❌ Você precisa estar em um canal de voz.", ephemeral=True, delete_after=5)
+        if not interaction.user.voice or interaction.user.voice.get("guild_id") != interaction.guild.id:
+            return await interaction.response.send_message("❌ Você precisa estar em um canal de voz DESTE servidor.", ephemeral=True, delete_after=5)
 
         servidor_db = dados["servidores"][sid]
         if servidor_db["usuarios"].get(uid, {}).get("entrada"):
@@ -125,17 +123,17 @@ class PontoView(discord.ui.View):
         except: pass
         await interaction.response.send_message("✅ Entrada registrada!", ephemeral=True, delete_after=5)
 
-    @discord.ui.button(label="Saída", style=discord.ButtonStyle.danger, custom_id="persistent_sai_v8")
+    @discord.ui.button(label="Saída", style=discord.ButtonStyle.danger, custom_id="persistent_sai_v9")
     async def sai(self, interaction: discord.Interaction, button: discord.ui.Button):
-        uid = str(interaction.user.id)
-        if uid in self.bot.monitoramento_voz:
-            self.bot.monitoramento_voz[uid].cancel()
-            del self.bot.monitoramento_voz[uid]
+        mid = f"{interaction.guild.id}-{interaction.user.id}"
+        if mid in self.bot.monitoramento_voz:
+            self.bot.monitoramento_voz[mid].cancel()
+            del self.bot.monitoramento_voz[mid]
 
         await interaction.response.send_message("✅ Saída processada.", ephemeral=True, delete_after=5)
         await processar_saida(interaction.user, interaction.guild)
 
-    @discord.ui.button(label="Calcular Horas", style=discord.ButtonStyle.secondary, custom_id="persistent_calc_v8")
+    @discord.ui.button(label="Calcular Horas", style=discord.ButtonStyle.secondary, custom_id="persistent_calc_v9")
     async def calc(self, interaction: discord.Interaction, button: discord.ui.Button):
         sid, uid = str(interaction.guild.id), str(interaction.user.id)
         dados = carregar_dados()
@@ -146,7 +144,6 @@ class PontoView(discord.ui.View):
         total_segundos = dados["servidores"][sid]["usuarios"][uid].get("total_segundos", 0)
         horas, rem = divmod(total_segundos, 3600)
         minutos, segundos = divmod(rem, 60)
-        # Formatação exata conforme solicitado
         tempo_formatado = f"**{horas} horas, {minutos} minutos e {segundos} segundos**"
         
         embed = discord.Embed(title="📊 Relatório de Horas", color=discord.Color.blue())
@@ -177,24 +174,29 @@ class PontoBot(commands.Bot):
     async def on_voice_state_update(self, member, before, after):
         if member.bot: return
         sid, uid = str(member.guild.id), str(member.id)
+        mid = f"{sid}-{uid}" # Monitoramento único por Servidor-Usuário
         
-        if before.channel and not after.channel:
-            dados = carregar_dados()
-            if sid in dados["servidores"] and uid in dados["servidores"][sid]["usuarios"]:
-                if dados["servidores"][sid]["usuarios"][uid].get("entrada"):
-                    if uid in self.monitoramento_voz: self.monitoramento_voz[uid].cancel()
-                    self.monitoramento_voz[uid] = asyncio.create_task(self.aguardar_retorno(member, member.guild))
+        # Caso 1: Saiu de uma call DESTE servidor (ou mudou para outro servidor)
+        if before.channel and before.channel.guild.id == member.guild.id:
+            if not after.channel or after.channel.guild.id != member.guild.id:
+                dados = carregar_dados()
+                if sid in dados["servidores"] and uid in dados["servidores"][sid]["usuarios"]:
+                    if dados["servidores"][sid]["usuarios"][uid].get("entrada"):
+                        if mid in self.monitoramento_voz: self.monitoramento_voz[mid].cancel()
+                        self.monitoramento_voz[mid] = asyncio.create_task(self.aguardar_retorno(member, member.guild))
         
-        if not before.channel and after.channel:
-            if uid in self.monitoramento_voz:
-                self.monitoramento_voz[uid].cancel()
-                del self.monitoramento_voz[uid]
+        # Caso 2: Entrou/Voltou para uma call DESTE servidor
+        if after.channel and after.channel.guild.id == member.guild.id:
+            if mid in self.monitoramento_voz:
+                self.monitoramento_voz[mid].cancel()
+                del self.monitoramento_voz[mid]
 
     async def aguardar_retorno(self, member, guild):
         try:
             await asyncio.sleep(300) # 5 minutos
             await processar_saida(member, guild, automatico=True)
-            if str(member.id) in self.monitoramento_voz: del self.monitoramento_voz[str(member.id)]
+            mid = f"{guild.id}-{member.id}"
+            if mid in self.monitoramento_voz: del self.monitoramento_voz[mid]
         except asyncio.CancelledError: pass
 
 bot = PontoBot()
@@ -224,27 +226,6 @@ async def ativar(interaction: discord.Interaction, chave: str):
         salvar_dados(dados)
         await interaction.response.send_message("🎉 Licença Ativada!", ephemeral=True)
     else:
-        embed_venda = discord.Embed(
-            title="❌ Chave Inválida",
-            description=f"Não foi possível ativar. Para adquirir, entre em nosso atendimento:\n**ID:** `{ID_SERVIDOR_VENDAS}`\n[Link]({LINK_SUPORTE})",
-            color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=embed_venda, ephemeral=True, delete_after=10)
-
-@bot.tree.command(name="listar_servidores", description="Lista servidores ativos")
-async def listar_servidores(interaction: discord.Interaction):
-    if interaction.user.id != ID_DONO: return
-    dados = carregar_dados()
-    lista = "\n".join([f"🏢 **{v.get('nome', 'N/A')}** | ID: `{k}`" for k, v in dados["servidores"].items()])
-    await interaction.response.send_message(f"📊 **Servidores:**\n{lista if lista else 'Nenhum'}", ephemeral=True)
-
-@bot.tree.command(name="suspender", description="Remove licença")
-async def suspender(interaction: discord.Interaction, id_servidor: str):
-    if interaction.user.id != ID_DONO: return
-    dados = carregar_dados()
-    if id_servidor in dados["servidores"]:
-        del dados["servidores"][id_servidor]
-        salvar_dados(dados)
-        await interaction.response.send_message(f"🚫 Servidor removido.", ephemeral=True)
+        await interaction.response.send_message("❌ Chave Inválida.", ephemeral=True)
 
 bot.run(TOKEN)
