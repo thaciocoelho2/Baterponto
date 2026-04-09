@@ -94,7 +94,7 @@ class PontoView(discord.ui.View):
                 description=f"Este servidor (**{interaction.guild.name}**) não possui uma licença ativa no sistema.\n\nPara adquirir uma chave ou ativar, entre em contato no nosso suporte:\n[Clique Aqui para Suporte]({LINK_SUPORTE})",
                 color=discord.Color.orange()
             )
-            return await interaction.response.send_message(embed=embed_licenca, ephemeral=True)
+            return await interaction.response.send_message(embed=embed_licenca, delete_after=5)
 
         if not interaction.user.voice:
             return await interaction.response.send_message(
@@ -104,7 +104,7 @@ class PontoView(discord.ui.View):
 
         servidor_db = dados["servidores"][sid]
         if servidor_db["usuarios"].get(uid, {}).get("entrada"):
-             return await interaction.response.send_message("⚠️ Você já possui uma entrada ativa.", ephemeral=True)
+             return await interaction.response.send_message("⚠️ Você já possui uma entrada ativa.", delete_after=5)
 
         agora = datetime.now(BR_TZ)
         if uid not in servidor_db["usuarios"]: servidor_db["usuarios"][uid] = {"total_segundos": 0}
@@ -122,7 +122,7 @@ class PontoView(discord.ui.View):
         
         try: await interaction.user.send(embed=embed_dm)
         except: pass
-        await interaction.response.send_message("✅ Ponto batido! Comprovante enviado na DM.", ephemeral=True)
+        await interaction.response.send_message("✅ Ponto batido! Comprovante enviado na DM.", delete_after=5)
 
     @discord.ui.button(label="Saída", style=discord.ButtonStyle.danger, custom_id="persistent_sai_v15")
     async def sai(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -131,7 +131,7 @@ class PontoView(discord.ui.View):
             self.bot.monitoramento_voz[uid].cancel()
             del self.bot.monitoramento_voz[uid]
 
-        await interaction.response.send_message("✅ Saída processada.", ephemeral=True)
+        await interaction.response.send_message("✅ Saída processada.", delete_after=5)
         await processar_saida(interaction.user, interaction.guild)
 
     @discord.ui.button(label="Calcular Horas", style=discord.ButtonStyle.secondary, custom_id="persistent_calc_v15")
@@ -140,7 +140,7 @@ class PontoView(discord.ui.View):
         dados = carregar_dados()
         
         if sid not in dados["servidores"] or uid not in dados["servidores"][sid]["usuarios"]:
-            return await interaction.response.send_message("❌ Você ainda não possui horas registradas.", ephemeral=True)
+            return await interaction.response.send_message("❌ Você ainda não possui horas registradas.", delete_after=5)
 
         total_segundos = dados["servidores"][sid]["usuarios"][uid].get("total_segundos", 0)
         horas, rem = divmod(total_segundos, 3600)
@@ -156,9 +156,9 @@ class PontoView(discord.ui.View):
 
         try:
             await interaction.user.send(embed=embed)
-            await interaction.response.send_message("✅ Relatório enviado na DM!", ephemeral=True)
+            await interaction.response.send_message("✅ Relatório enviado na DM!", delete_after=5)
         except:
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message(embed=embed, delete_after=5)
 
 # --- 5. CLASSE DO BOT ---
 class PontoBot(commands.Bot):
