@@ -99,7 +99,7 @@ class PontoView(discord.ui.View):
         if not interaction.user.voice:
             return await interaction.response.send_message(
                 f"❌ {interaction.user.mention}, você deve estar em um canal de voz deste servidor para bater o ponto.",
-                ephemeral=True
+                delete_after=5
             )
 
         servidor_db = dados["servidores"][sid]
