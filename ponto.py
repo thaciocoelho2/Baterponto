@@ -126,10 +126,11 @@ class PontoView(discord.ui.View):
 
     @discord.ui.button(label="Saída", style=discord.ButtonStyle.danger, custom_id="persistent_sai_v15")
     async def sai(self, interaction: discord.Interaction, button: discord.ui.Button):
-        uid = str(interaction.user.id)
-        if uid in self.bot.monitoramento_voz:
-            self.bot.monitoramento_voz[uid].cancel()
-            del self.bot.monitoramento_voz[uid]
+        sid, uid = str(interaction.guild.id), str(interaction.user.id)
+        key = self.bot._monitor_key(sid, uid)
+        if key in self.bot.monitoramento_voz:
+            self.bot.monitoramento_voz[key].cancel()
+            del self.bot.monitoramento_voz[key]
 
         await interaction.response.send_message("✅ Saída processada.", delete_after=5)
         await processar_saida(interaction.user, interaction.guild)
@@ -167,6 +168,9 @@ class PontoBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
         self.monitoramento_voz = {}
 
+    def _monitor_key(self, guild_id, user_id):
+        return f"{guild_id}:{user_id}"
+
     async def setup_hook(self):
         self.add_view(PontoView(self))
         await self.tree.sync()
@@ -175,23 +179,28 @@ class PontoBot(commands.Bot):
     async def on_voice_state_update(self, member, before, after):
         if member.bot: return
         sid, uid = str(member.guild.id), str(member.id)
+        key = self._monitor_key(sid, uid)
+
         if before.channel and not after.channel:
             dados = carregar_dados()
             if sid in dados["servidores"] and uid in dados["servidores"][sid]["usuarios"]:
                 if dados["servidores"][sid]["usuarios"][uid].get("entrada"):
-                    if uid in self.monitoramento_voz: self.monitoramento_voz[uid].cancel()
-                    self.monitoramento_voz[uid] = asyncio.create_task(self.aguardar_retorno(member, member.guild))
-        if not before.channel and after.channel:
-            if uid in self.monitoramento_voz:
-                self.monitoramento_voz[uid].cancel()
-                del self.monitoramento_voz[uid]
+                    if key in self.monitoramento_voz:
+                        self.monitoramento_voz[key].cancel()
+                    self.monitoramento_voz[key] = asyncio.create_task(self.aguardar_retorno(member, member.guild, key))
+        elif not before.channel and after.channel:
+            if key in self.monitoramento_voz:
+                self.monitoramento_voz[key].cancel()
+                del self.monitoramento_voz[key]
 
-    async def aguardar_retorno(self, member, guild):
+    async def aguardar_retorno(self, member, guild, key):
         try:
             await asyncio.sleep(300) # 5 minutos
             await processar_saida(member, guild, automatico=True)
-            if str(member.id) in self.monitoramento_voz: del self.monitoramento_voz[str(member.id)]
-        except asyncio.CancelledError: pass
+            if key in self.monitoramento_voz:
+                del self.monitoramento_voz[key]
+        except asyncio.CancelledError:
+            pass
 
 bot = PontoBot()
 
