@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 import json, os, asyncio, uuid
-from datetime import datetime # Alterado para usar o relógio local do sistema
+from datetime import datetime
 from dotenv import load_dotenv
 
 # --- 1. CONFIGURAÇÕES ---
@@ -14,7 +14,7 @@ ID_DONO = 1490046139766935612
 
 SENHA_LIBERACAO = "PONTO_2024_PRO" 
 ID_SERVIDOR_VENDAS = 1491423855334654002 
-LINK_SUPORTE = f"https://discord.gg/ZNHXTuKmAF" 
+LINK_SUPORTE = "https://discord.gg/ZNHXTuKmAF" 
 
 # --- 2. BANCO DE DADOS ---
 def carregar_dados():
@@ -47,7 +47,7 @@ async def processar_saida(user, guild, automatico=False):
 
     entrada_str = servidor_db["usuarios"][uid]["entrada"]
     entrada_dt = datetime.strptime(entrada_str, FMT_HORA)
-    agora = datetime.now() # Captura a hora exata da máquina atual
+    agora = datetime.now() # USA A HORA DO SISTEMA OPERACIONAL
     
     delta = agora - entrada_dt
     segundos_trabalhados = int(delta.total_seconds())
@@ -83,7 +83,7 @@ class PontoView(discord.ui.View):
         super().__init__(timeout=None)
         self.bot = bot_instance
 
-    @discord.ui.button(label="Entrada", style=discord.ButtonStyle.success, custom_id="persistent_ent_v6")
+    @discord.ui.button(label="Entrada", style=discord.ButtonStyle.success, custom_id="persistent_ent_v7")
     async def ent(self, interaction: discord.Interaction, button: discord.ui.Button):
         sid, uid = str(interaction.guild.id), str(interaction.user.id)
         dados = carregar_dados()
@@ -122,7 +122,7 @@ class PontoView(discord.ui.View):
         except: pass
         await interaction.response.send_message("✅ Entrada registrada!", ephemeral=True, delete_after=5)
 
-    @discord.ui.button(label="Saída", style=discord.ButtonStyle.danger, custom_id="persistent_sai_v6")
+    @discord.ui.button(label="Saída", style=discord.ButtonStyle.danger, custom_id="persistent_sai_v7")
     async def sai(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(interaction.user.id)
         if uid in self.bot.monitoramento_voz:
@@ -132,7 +132,7 @@ class PontoView(discord.ui.View):
         await interaction.response.send_message("✅ Saída processada.", ephemeral=True, delete_after=5)
         await processar_saida(interaction.user, interaction.guild)
 
-    @discord.ui.button(label="Calcular Horas", style=discord.ButtonStyle.secondary, custom_id="persistent_calc_v6")
+    @discord.ui.button(label="Calcular Horas", style=discord.ButtonStyle.secondary, custom_id="persistent_calc_v7")
     async def calc(self, interaction: discord.Interaction, button: discord.ui.Button):
         sid, uid = str(interaction.guild.id), str(interaction.user.id)
         dados = carregar_dados()
