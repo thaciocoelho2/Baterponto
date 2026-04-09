@@ -1,12 +1,14 @@
 import discord
 from discord.ext import commands
-import json, os, asyncio, uuid
+import json, os, asyncio, uuid, pytz
 from datetime import datetime
 from dotenv import load_dotenv
 
 # --- 1. CONFIGURAÇÕES ---
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
+# Fuso horário restaurado para garantir sincronia com o Brasil
+BR_TZ = pytz.timezone('America/Sao_Paulo')
 FMT_HORA = "%Y-%m-%d %H:%M:%S"
 
 # ⚠️ COLOQUE SEU ID MANUALMENTE AQUI
@@ -46,8 +48,9 @@ async def processar_saida(user, guild, automatico=False):
         return
 
     entrada_str = servidor_db["usuarios"][uid]["entrada"]
-    entrada_dt = datetime.strptime(entrada_str, FMT_HORA)
-    agora = datetime.now() # USA A HORA DO SISTEMA OPERACIONAL
+    # Converte a string salva em objeto datetime com fuso horário
+    entrada_dt = BR_TZ.localize(datetime.strptime(entrada_str, FMT_HORA))
+    agora = datetime.now(BR_TZ)
     
     delta = agora - entrada_dt
     segundos_trabalhados = int(delta.total_seconds())
@@ -83,7 +86,7 @@ class PontoView(discord.ui.View):
         super().__init__(timeout=None)
         self.bot = bot_instance
 
-    @discord.ui.button(label="Entrada", style=discord.ButtonStyle.success, custom_id="persistent_ent_v7")
+    @discord.ui.button(label="Entrada", style=discord.ButtonStyle.success, custom_id="persistent_ent_v8")
     async def ent(self, interaction: discord.Interaction, button: discord.ui.Button):
         sid, uid = str(interaction.guild.id), str(interaction.user.id)
         dados = carregar_dados()
@@ -103,7 +106,7 @@ class PontoView(discord.ui.View):
         if servidor_db["usuarios"].get(uid, {}).get("entrada"):
              return await interaction.response.send_message("⚠️ Você já possui uma entrada ativa.", ephemeral=True, delete_after=5)
 
-        agora = datetime.now()
+        agora = datetime.now(BR_TZ)
         if uid not in servidor_db["usuarios"]: servidor_db["usuarios"][uid] = {"total_segundos": 0}
         servidor_db["usuarios"][uid]["entrada"] = agora.strftime(FMT_HORA)
         servidor_db["nome"] = interaction.guild.name
@@ -122,7 +125,7 @@ class PontoView(discord.ui.View):
         except: pass
         await interaction.response.send_message("✅ Entrada registrada!", ephemeral=True, delete_after=5)
 
-    @discord.ui.button(label="Saída", style=discord.ButtonStyle.danger, custom_id="persistent_sai_v7")
+    @discord.ui.button(label="Saída", style=discord.ButtonStyle.danger, custom_id="persistent_sai_v8")
     async def sai(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(interaction.user.id)
         if uid in self.bot.monitoramento_voz:
@@ -132,7 +135,7 @@ class PontoView(discord.ui.View):
         await interaction.response.send_message("✅ Saída processada.", ephemeral=True, delete_after=5)
         await processar_saida(interaction.user, interaction.guild)
 
-    @discord.ui.button(label="Calcular Horas", style=discord.ButtonStyle.secondary, custom_id="persistent_calc_v7")
+    @discord.ui.button(label="Calcular Horas", style=discord.ButtonStyle.secondary, custom_id="persistent_calc_v8")
     async def calc(self, interaction: discord.Interaction, button: discord.ui.Button):
         sid, uid = str(interaction.guild.id), str(interaction.user.id)
         dados = carregar_dados()
@@ -143,6 +146,7 @@ class PontoView(discord.ui.View):
         total_segundos = dados["servidores"][sid]["usuarios"][uid].get("total_segundos", 0)
         horas, rem = divmod(total_segundos, 3600)
         minutos, segundos = divmod(rem, 60)
+        # Formatação exata conforme solicitado
         tempo_formatado = f"**{horas} horas, {minutos} minutos e {segundos} segundos**"
         
         embed = discord.Embed(title="📊 Relatório de Horas", color=discord.Color.blue())
@@ -188,7 +192,7 @@ class PontoBot(commands.Bot):
 
     async def aguardar_retorno(self, member, guild):
         try:
-            await asyncio.sleep(300) 
+            await asyncio.sleep(300) # 5 minutos
             await processar_saida(member, guild, automatico=True)
             if str(member.id) in self.monitoramento_voz: del self.monitoramento_voz[str(member.id)]
         except asyncio.CancelledError: pass
