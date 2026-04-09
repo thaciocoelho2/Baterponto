@@ -72,7 +72,8 @@ async def processar_saida(user, guild, automatico=False):
     embed.add_field(name="⏰ Horário", value=f"`{agora.strftime('%H:%M:%S')}`", inline=False)
     embed.add_field(name="⏳ Tempo Total", value=f"**{tempo_sessao}**", inline=False)
     
-    embed.set_footer(text="Jornada encerrada com sucesso")
+    footer = "Jornada encerrada por inatividade" if automatico else "Registro realizado com sucesso"
+    embed.set_footer(text=footer)
 
     try: await user.send(embed=embed)
     except: pass
@@ -83,7 +84,7 @@ class PontoView(discord.ui.View):
         super().__init__(timeout=None)
         self.bot = bot_instance
 
-    @discord.ui.button(label="Entrada", style=discord.ButtonStyle.success, custom_id="persistent_ent_v4")
+    @discord.ui.button(label="Entrada", style=discord.ButtonStyle.success, custom_id="persistent_ent_v5")
     async def ent(self, interaction: discord.Interaction, button: discord.ui.Button):
         sid, uid = str(interaction.guild.id), str(interaction.user.id)
         dados = carregar_dados()
@@ -122,7 +123,7 @@ class PontoView(discord.ui.View):
         except: pass
         await interaction.response.send_message("✅ Entrada registrada!", ephemeral=True, delete_after=5)
 
-    @discord.ui.button(label="Saída", style=discord.ButtonStyle.danger, custom_id="persistent_sai_v4")
+    @discord.ui.button(label="Saída", style=discord.ButtonStyle.danger, custom_id="persistent_sai_v5")
     async def sai(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(interaction.user.id)
         if uid in self.bot.monitoramento_voz:
@@ -132,7 +133,7 @@ class PontoView(discord.ui.View):
         await interaction.response.send_message("✅ Saída processada.", ephemeral=True, delete_after=5)
         await processar_saida(interaction.user, interaction.guild)
 
-    @discord.ui.button(label="Calcular Horas", style=discord.ButtonStyle.secondary, custom_id="persistent_calc_v4")
+    @discord.ui.button(label="Calcular Horas", style=discord.ButtonStyle.secondary, custom_id="persistent_calc_v5")
     async def calc(self, interaction: discord.Interaction, button: discord.ui.Button):
         sid, uid = str(interaction.guild.id), str(interaction.user.id)
         dados = carregar_dados()
@@ -141,8 +142,6 @@ class PontoView(discord.ui.View):
             return await interaction.response.send_message("❌ Sem horas registradas.", ephemeral=True, delete_after=5)
 
         total_segundos = dados["servidores"][sid]["usuarios"][uid].get("total_segundos", 0)
-        
-        # --- CORREÇÃO: CÁLCULO E FORMATAÇÃO EXATA (IGUAL IMAGEM 6) ---
         horas, rem = divmod(total_segundos, 3600)
         minutos, segundos = divmod(rem, 60)
         tempo_formatado = f"**{horas} horas, {minutos} minutos e {segundos} segundos**"
@@ -175,12 +174,18 @@ class PontoBot(commands.Bot):
     async def on_voice_state_update(self, member, before, after):
         if member.bot: return
         sid, uid = str(member.guild.id), str(member.id)
+        
+        # Se o usuário saiu de um canal e não entrou em outro (ficou fora da voz)
         if before.channel and not after.channel:
             dados = carregar_dados()
+            # Verifica se ele tem um ponto aberto
             if sid in dados["servidores"] and uid in dados["servidores"][sid]["usuarios"]:
                 if dados["servidores"][sid]["usuarios"][uid].get("entrada"):
+                    # Cancela monitoramento antigo se existir e inicia novo de 5min
                     if uid in self.monitoramento_voz: self.monitoramento_voz[uid].cancel()
                     self.monitoramento_voz[uid] = asyncio.create_task(self.aguardar_retorno(member, member.guild))
+        
+        # Se o usuário voltou para qualquer canal de voz, cancela o timer de fechamento
         if not before.channel and after.channel:
             if uid in self.monitoramento_voz:
                 self.monitoramento_voz[uid].cancel()
@@ -188,7 +193,7 @@ class PontoBot(commands.Bot):
 
     async def aguardar_retorno(self, member, guild):
         try:
-            await asyncio.sleep(300) 
+            await asyncio.sleep(300) # 5 minutos
             await processar_saida(member, guild, automatico=True)
             if str(member.id) in self.monitoramento_voz: del self.monitoramento_voz[str(member.id)]
         except asyncio.CancelledError: pass
